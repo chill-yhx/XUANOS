@@ -2,6 +2,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
+from app.core.idempotency import IdempotencyManager
 from app.db.seed import DEMO_USER_ID, ensure_demo_user
 from app.models.thread import Thread
 from app.repositories.snapshots import SnapshotRepository
@@ -9,7 +10,7 @@ from app.repositories.threads import ThreadRepository
 from app.repositories.workflow import WorkflowRepository
 from app.schemas.action_result import ActionResultRead
 from app.schemas.plan import PlanItemRead, PlanRead
-from app.schemas.thread import ThreadAggregate, ThreadCreate
+from app.schemas.thread import ThreadAggregate, ThreadCreate, ThreadRead
 from app.schemas.understanding import (
     AnswerRead,
     CorrectionRead,
@@ -25,12 +26,23 @@ class ThreadService:
         self.snapshots = SnapshotRepository(session)
         self.workflow = WorkflowRepository(session)
 
-    def create(self, payload: ThreadCreate) -> Thread:
+    def create(self, payload: ThreadCreate, idempotency_key: str) -> dict:
         ensure_demo_user(self.session)
+        manager = IdempotencyManager(
+            self.session,
+            "POST /api/threads",
+            idempotency_key,
+            payload.model_dump(mode="json"),
+        )
+        if replay := manager.replay():
+            return replay
+
         thread = self.threads.add(Thread(user_id=DEMO_USER_ID, title=payload.title.strip()))
+        self.session.flush()
+        data = ThreadRead.model_validate(thread).model_dump(mode="json")
+        manager.store("thread", thread.id, data)
         self.session.commit()
-        self.session.refresh(thread)
-        return thread
+        return data
 
     def list(self, limit: int, thread_status: str | None = None) -> list[Thread]:
         ensure_demo_user(self.session)

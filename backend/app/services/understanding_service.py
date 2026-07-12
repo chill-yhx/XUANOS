@@ -107,11 +107,16 @@ class UnderstandingService:
             goal = self._ensure_goal(understanding)
             self._ensure_constraint(understanding, goal)
             hypothesis = self._ensure_hypothesis(thread.id)
+            hypotheses = (
+                []
+                if hypothesis.user_attitude == "rejected" or hypothesis.status in {"denied", "expired"}
+                else [self._hypothesis_frontend(hypothesis)]
+            )
             snapshot = SnapshotService(self.session).create_version(
                 source_thread_id=thread.id,
                 current_vector=goal.desired_outcome,
                 reality_boundaries=[understanding.constraints_summary or "现实限制仍待补充"],
-                hypotheses=[self._hypothesis_frontend(hypothesis)],
+                hypotheses=hypotheses,
                 recent_revision="理解已确认，并生成起点档案。",
             )
         else:

@@ -26,12 +26,14 @@ Swagger: `http://127.0.0.1:8000/docs`
 The second backend batch owns the complete deterministic flow:
 
 ```text
+POST /api/threads
 POST /api/understanding/analyze
 POST /api/understanding/{session_id}/confirm
 POST /api/plans
 POST /api/plans/{plan_id}/revise
 POST /api/plans/{plan_id}/accept
 POST /api/action-results
+POST /api/users/demo-user/corrections
 ```
 
 Every core write requires an `Idempotency-Key` header. The same key and payload replay the first response; reusing a key with a different payload returns `409 DUPLICATE_SUBMISSION`.

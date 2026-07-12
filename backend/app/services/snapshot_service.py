@@ -23,7 +23,7 @@ class SnapshotService:
     def create_version(
         self,
         *,
-        source_thread_id: str,
+        source_thread_id: str | None,
         source_action_result_id: str | None = None,
         current_vector: str | None = None,
         current_stage: str | None = None,
@@ -51,12 +51,16 @@ class SnapshotService:
             version=current.version + 1,
             source_thread_id=source_thread_id,
             source_action_result_id=source_action_result_id,
-            current_vector=current_vector or current.current_vector,
-            current_stage=current_stage or current.current_stage,
-            current_action=current_action or current.current_action,
-            reality_boundaries=deepcopy(reality_boundaries or current.reality_boundaries),
-            effective_patterns=deepcopy(effective_patterns or current.effective_patterns),
-            hypotheses=deepcopy(hypotheses or current.hypotheses),
+            current_vector=current.current_vector if current_vector is None else current_vector,
+            current_stage=current.current_stage if current_stage is None else current_stage,
+            current_action=current.current_action if current_action is None else current_action,
+            reality_boundaries=deepcopy(
+                current.reality_boundaries if reality_boundaries is None else reality_boundaries
+            ),
+            effective_patterns=deepcopy(
+                current.effective_patterns if effective_patterns is None else effective_patterns
+            ),
+            hypotheses=deepcopy(current.hypotheses if hypotheses is None else hypotheses),
             recent_revisions=revisions,
             user_corrections=corrections,
             revision_count=current.revision_count + (1 if increment_revision else 0),

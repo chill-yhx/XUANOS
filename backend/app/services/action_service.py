@@ -91,12 +91,13 @@ class ActionService:
             self.session.add(hypothesis)
             self.session.flush()
         evidence = {"action_result_id": action.id, "progress_percent": action.progress_percent}
-        hypothesis.status = decision.hypothesis_status
-        hypothesis.last_reviewed_at = datetime.now(UTC)
-        if decision.hypothesis_status == "denied":
-            hypothesis.opposing_evidence = [*hypothesis.opposing_evidence, evidence]
-        else:
-            hypothesis.supporting_evidence = [*hypothesis.supporting_evidence, evidence]
+        if hypothesis.user_attitude != "rejected":
+            hypothesis.status = decision.hypothesis_status
+            hypothesis.last_reviewed_at = datetime.now(UTC)
+            if decision.hypothesis_status == "denied":
+                hypothesis.opposing_evidence = [*hypothesis.opposing_evidence, evidence]
+            else:
+                hypothesis.supporting_evidence = [*hypothesis.supporting_evidence, evidence]
 
         correction_text = None
         if payload.unrealistic_part:
@@ -119,7 +120,11 @@ class ActionService:
         patterns = list(current_snapshot.effective_patterns)
         if not any(item.get("content") == decision.pattern for item in patterns):
             patterns.append({"content": decision.pattern, "maturity": "candidate"})
-        hypothesis_payload = [self._hypothesis_frontend(item) for item in self.workflow.hypotheses(thread.id)]
+        hypothesis_payload = [
+            self._hypothesis_frontend(item)
+            for item in self.workflow.hypotheses(thread.id)
+            if item.user_attitude != "rejected" and item.status not in {"denied", "expired"}
+        ]
         snapshot = SnapshotService(self.session).create_version(
             source_thread_id=thread.id,
             source_action_result_id=action.id,

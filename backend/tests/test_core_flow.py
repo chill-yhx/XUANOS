@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -27,7 +28,11 @@ def idempotency(value: str) -> dict[str, str]:
 
 
 def create_thread(client: TestClient, title: str = "后端核心闭环") -> str:
-    response = client.post("/api/threads", json={"title": title})
+    response = client.post(
+        "/api/threads",
+        headers=idempotency(f"create-thread-{uuid4().hex}"),
+        json={"title": title},
+    )
     assert response.status_code == 201
     return response.json()["data"]["id"]
 

@@ -149,12 +149,14 @@ interface ApiErrorPayload {
 当前以下写接口必须携带 `Idempotency-Key`，长度为 8 至 160：
 
 ```text
+POST /api/threads
 POST /api/understanding/analyze
 POST /api/understanding/{session_id}/confirm
 POST /api/plans
 POST /api/plans/{plan_id}/revise
 POST /api/plans/{plan_id}/accept
 POST /api/action-results
+POST /api/users/demo-user/corrections
 ```
 
 建议格式：
@@ -165,7 +167,7 @@ xuanos-{operation}-{crypto.randomUUID()}
 
 同一操作在结果未知时重试，必须复用同一个 key 和完全相同的请求体。用户修改请求内容后，必须创建新 key。
 
-当前 `POST /api/threads` 和 `POST /api/demo/reset` 未接入幂等头，前端不得自动重试创建线程。
+当前只有 `POST /api/demo/reset` 未接入幂等头。
 
 ---
 
@@ -176,7 +178,7 @@ xuanos-{operation}-{crypto.randomUUID()}
 | 前端场景 | API | 状态码 | 幂等头 | 主要写入 |
 |---|---|---:|---:|---|
 | 启动探活 | `GET /health` | 200/503 | 否 | API 可用状态 |
-| 创建线程 | `POST /api/threads` | 201 | 当前不支持 | `activeThread`、服务端 ID |
+| 创建线程 | `POST /api/threads` | 201 | 是 | `activeThread`、服务端 ID |
 | 恢复线程列表 | `GET /api/threads?limit=20&status=...` | 200 | 否 | 线程摘要列表 |
 | 恢复完整线程 | `GET /api/threads/{thread_id}` | 200 | 否 | 整个业务聚合状态 |
 | 开始理解 / 提交回答 | `POST /api/understanding/analyze` | 200 | 是 | session、回答、下一题或摘要 |
@@ -186,6 +188,7 @@ xuanos-{operation}-{crypto.randomUUID()}
 | 接受当前计划 | `POST /api/plans/{plan_id}/accept` | 200 | 是 | accepted plan、快照、步骤 |
 | 提交行动反馈 | `POST /api/action-results` | 201 | 是 | 结果、修正、hypothesis、快照 |
 | 获取最新系统快照 | `GET /api/users/demo-user/snapshot` | 200 | 否 | 最新快照 |
+| 提交用户纠正 | `POST /api/users/demo-user/corrections` | 201 | 是 | 纠正记录与当前/新版快照 |
 | 重置演示数据 | `POST /api/demo/reset` | 200 | 当前不支持 | 初始快照与 `idle` |
 
 ## 4.2 应用启动与恢复
@@ -219,6 +222,7 @@ current_snapshot
 
 ```http
 POST /api/threads
+Idempotency-Key: ...
 Content-Type: application/json
 
 {
@@ -234,7 +238,7 @@ Content-Type: application/json
 - 清空上一条未绑定线程的理解和计划草稿。
 - 不再使用初始 Mock 的 `thread-xuanos-summer` 作为服务端 ID。
 
-按钮在请求中必须禁用。由于当前接口没有幂等支持，超时后不自动再次 POST；先调用线程列表让用户恢复最近线程。
+按钮在请求中必须禁用。结果未知时使用相同 key 和相同请求体重试，不得生成新 key 创建重复线程。
 
 ## 4.4 选择表达方式并开始理解
 
@@ -472,6 +476,28 @@ GET /api/users/demo-user/snapshot
 - version 相同且 ID 相同时视为同一快照。
 - 不允许旧缓存覆盖更高版本。
 - 快照 GET 失败时保留刚由反馈响应返回的版本，并显示“等待重新同步”，不回滚成功反馈。
+
+## 4.12 提交用户纠正
+
+“我的系统”页对主线、边界、规律、假设等内容的纠正调用：
+
+```http
+POST /api/users/demo-user/corrections
+Idempotency-Key: ...
+```
+
+```json
+{
+  "target_type": "system_section",
+  "target_id": "vector",
+  "correction_type": "changed",
+  "original_value": "完成 XUANOS 静态前端原型",
+  "corrected_value": "完成 XUANOS 前后端联调",
+  "reason": "当前项目阶段已经变化"
+}
+```
+
+成功响应返回追加式 correction、当前或新版 snapshot，以及 `snapshot_updated`。`accurate` 只记录确认；`partial`、`inaccurate`、`changed`、`discontinue` 创建新版快照。前端必须同时按 correction ID 与 snapshot version 合并，重复请求复用原幂等 key。
 
 ---
 
@@ -750,6 +776,10 @@ fromConfirmResult
 
 Mapper 必须有独立单元测试，覆盖 null 字段、空版本链、v1/v2、结构化 snapshot、answer revision 和聚合恢复。
 
+## 7.6 `correctionMapper`
+
+职责：构造用户纠正请求，映射追加式 correction，并将响应中的 snapshot 交给 `snapshotMapper`。UI 中文选项映射为 `accurate`、`partial`、`inaccurate`、`changed`、`discontinue`。
+
 ---
 
 # 8. API Client 与 Service 文件
@@ -767,6 +797,7 @@ frontend/src/api/
 ├── plansApi.ts
 ├── actionResultsApi.ts
 ├── snapshotsApi.ts
+├── correctionsApi.ts
 └── demoApi.ts
 ```
 
@@ -787,6 +818,7 @@ frontend/src/services/
 ├── planService.ts
 ├── actionResultService.ts
 ├── snapshotService.ts
+├── correctionService.ts
 └── sessionSyncService.ts
 ```
 
@@ -957,18 +989,16 @@ VITE_ENABLE_MOCK_FALLBACK=true   # 仅开发和演示环境
 
 ---
 
-# 12. 当前契约缺口
+# 12. 当前剩余契约边界
 
 联调必须按当前实现处理以下差异，不得在前端假装后端已经支持：
 
-1. `POST /api/threads` 当前没有 `Idempotency-Key`，只能依赖前端提交锁和超时后的列表恢复。
-2. 服务端不单独持久化 `expression_mode` 选择页、`collecting_input`、`action_pending` 和请求中的 `feedback_submitted`，这些是前端瞬时步骤。
-3. `PlanRead` 不直接返回主目标正文，只返回 `primary_goal_id`、summary 和关联 understanding ID；前端需从 confirmed understanding 或 snapshot 组合主目标。
-4. “我的系统”页当前任意手工纠正没有独立后端接口。联调时只能保留为未提交草稿，不能继续以 `ADD_SYSTEM_CORRECTION` 伪装成已持久化。
-5. 线程列表当前支持 `limit` 和 `status`，尚未接收 cursor；虽然 envelope 有 `next_cursor`，前端本轮不要发送 cursor。
-6. mentor preferences API 尚未出现在当前 routes 中，不属于本次核心闭环联调。
+1. 服务端不单独持久化 `expression_mode` 选择页、`collecting_input`、`action_pending` 和请求中的 `feedback_submitted`，这些是前端瞬时步骤。
+2. `PlanRead` 不直接返回主目标正文，只返回 `primary_goal_id`、summary 和关联 understanding ID；前端需从 confirmed understanding 或 snapshot 组合主目标。
+3. 线程列表当前支持 `limit` 和 `status`，尚未接收 cursor；虽然 envelope 有 `next_cursor`，前端本轮不要发送 cursor。
+4. mentor preferences API 尚未出现在当前 routes 中，不属于本次核心闭环联调。
 
-前三项不阻塞完整核心流程。第 4 项不在本轮验收主链路内，后续应单独定义 API 后再接入。
+这些边界不阻塞完整核心流程。用户手工纠正已由 `POST /api/users/demo-user/corrections` 提供持久化契约。
 
 ---
 
@@ -1064,17 +1094,20 @@ frontend/src/api/understandingApi.ts
 frontend/src/api/plansApi.ts
 frontend/src/api/actionResultsApi.ts
 frontend/src/api/snapshotsApi.ts
+frontend/src/api/correctionsApi.ts
 frontend/src/api/demoApi.ts
 frontend/src/mappers/understandingMapper.ts
 frontend/src/mappers/planMapper.ts
 frontend/src/mappers/actionResultMapper.ts
 frontend/src/mappers/snapshotMapper.ts
 frontend/src/mappers/threadAggregateMapper.ts
+frontend/src/mappers/correctionMapper.ts
 frontend/src/services/threadService.ts
 frontend/src/services/understandingService.ts
 frontend/src/services/planService.ts
 frontend/src/services/actionResultService.ts
 frontend/src/services/snapshotService.ts
+frontend/src/services/correctionService.ts
 frontend/src/services/sessionSyncService.ts
 ```
 
@@ -1096,7 +1129,7 @@ frontend/src/pages/SystemPage.tsx
 frontend/src/App.tsx（仅在恢复/导航边界需要时）
 ```
 
-本轮完整核心流程原则上不要求修改后端。若后续要消除当前契约缺口，可单独为线程创建幂等和系统快照纠正设计后端接口，不应夹带进首轮联调。
+线程创建幂等与系统快照纠正接口已经补齐。后续联调原则上不再要求修改后端核心流程。
 
 ---
 

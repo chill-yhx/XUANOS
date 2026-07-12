@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.responses import success
@@ -10,12 +10,17 @@ from app.schemas.thread import ThreadAggregate, ThreadCreate, ThreadRead
 from app.services.thread_service import ThreadService
 
 router = APIRouter(prefix="/threads", tags=["threads"])
+IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=160)]
 
 
 @router.post("", response_model=Envelope[ThreadRead], status_code=status.HTTP_201_CREATED)
-def create_thread(payload: ThreadCreate, request: Request, session: Annotated[Session, Depends(get_db)]) -> dict:
-    thread = ThreadService(session).create(payload)
-    return success(request, ThreadRead.model_validate(thread))
+def create_thread(
+    payload: ThreadCreate,
+    request: Request,
+    idempotency_key: IdempotencyKey,
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    return success(request, ThreadService(session).create(payload, idempotency_key))
 
 
 @router.get("", response_model=Envelope[list[ThreadRead]])

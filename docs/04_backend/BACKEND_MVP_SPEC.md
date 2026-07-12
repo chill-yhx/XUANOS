@@ -538,17 +538,17 @@ system_revised
 
 职责：为 `demo-user` 创建任务线程。
 
+请求头：`Idempotency-Key: thread-{client-uuid}`。
+
 请求：
 
 ```json
 {
-  "title": "XUANOS 暑假开发",
-  "expression_mode": null,
-  "initial_input": null
+  "title": "XUANOS 暑假开发"
 }
 ```
 
-行为：创建线程，`current_step=idle`；如果提供表达模式和输入，可同时创建初始 understanding session，但不得跳过问题与确认。
+行为：创建线程，`current_step=idle`。相同 key 与相同请求返回首次结果，不创建第二条线程；相同 key 与不同请求返回 `409 DUPLICATE_SUBMISSION`。
 
 响应：`201`，返回线程、当前步骤和当前对象指针。
 
@@ -756,7 +756,27 @@ updated_at
 
 如果用户还没有快照，服务端创建或返回初始 demo snapshot。
 
-## 8.12 `PUT /api/users/demo-user/mentor-preferences`
+## 8.12 `POST /api/users/demo-user/corrections`
+
+职责：追加用户对理解、目标、约束、计划、快照、假设或系统快照区域的纠正。
+
+请求头：`Idempotency-Key: correction-{client-uuid}`。
+
+请求字段：`target_type`、`target_id`、`correction_type`、`original_value`、`corrected_value`、`reason`。
+
+`correction_type` 支持：`accurate`、`partial`、`inaccurate`、`changed`、`discontinue`。
+
+规则：
+
+- 每次提交新增 `user_corrections` 记录，不覆盖原始对象或旧纠正。
+- `accurate` 只追加确认记录并返回当前快照。
+- 其他类型创建新版快照，写入用户纠正和最近修正；命中主线、行动、边界、规律或假设时同步修正快照投影。
+- `discontinue` 停止在当前快照中继续采用目标内容；对 hypothesis 同时保留用户拒绝态，后续规则不得静默恢复。
+- 相同幂等 key 与相同请求返回首次纠正和快照，不重复升版。
+
+响应 `201`：返回最新 correction、当前或新版 snapshot，以及 `snapshot_updated`。
+
+## 8.13 `PUT /api/users/demo-user/mentor-preferences`
 
 职责：创建或更新当前导师偏好。
 
@@ -764,7 +784,7 @@ updated_at
 
 服务端不得静默把 `system_adjustment` 变成用户选择；只有用户提交后才更新实际偏好。
 
-## 8.13 `POST /api/demo/reset`
+## 8.14 `POST /api/demo/reset`
 
 职责：清理并重建 `demo-user` 的演示数据。
 
