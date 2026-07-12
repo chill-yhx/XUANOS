@@ -2,7 +2,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.action_result import ActionResultRead
+from app.schemas.plan import PlanRead
 from app.schemas.snapshot import SnapshotRead
+from app.schemas.understanding import AnswerRead, CorrectionRead, UnderstandingSessionRead, UnderstandingSummaryRead
 
 
 class ThreadCreate(BaseModel):
@@ -27,11 +30,11 @@ class ThreadRead(BaseModel):
 
 class ThreadAggregate(BaseModel):
     thread: ThreadRead
-    active_understanding_session: None = None
-    current_answers: list[object] = []
-    understanding_summary: None = None
-    recent_corrections: list[object] = []
-    current_plan: None = None
-    plan_versions: list[object] = []
-    latest_action_result: None = None
+    active_understanding_session: UnderstandingSessionRead | None = None
+    current_answers: list[AnswerRead] = Field(default_factory=list)
+    understanding_summary: UnderstandingSummaryRead | None = None
+    recent_corrections: list[CorrectionRead] = Field(default_factory=list)
+    current_plan: PlanRead | None = None
+    plan_versions: list[PlanRead] = Field(default_factory=list)
+    latest_action_result: ActionResultRead | None = None
     current_snapshot: SnapshotRead

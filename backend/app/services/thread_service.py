@@ -6,7 +6,16 @@ from app.db.seed import DEMO_USER_ID, ensure_demo_user
 from app.models.thread import Thread
 from app.repositories.snapshots import SnapshotRepository
 from app.repositories.threads import ThreadRepository
+from app.repositories.workflow import WorkflowRepository
+from app.schemas.action_result import ActionResultRead
+from app.schemas.plan import PlanItemRead, PlanRead
 from app.schemas.thread import ThreadAggregate, ThreadCreate
+from app.schemas.understanding import (
+    AnswerRead,
+    CorrectionRead,
+    UnderstandingSessionRead,
+    UnderstandingSummaryRead,
+)
 
 
 class ThreadService:
@@ -14,6 +23,7 @@ class ThreadService:
         self.session = session
         self.threads = ThreadRepository(session)
         self.snapshots = SnapshotRepository(session)
+        self.workflow = WorkflowRepository(session)
 
     def create(self, payload: ThreadCreate) -> Thread:
         ensure_demo_user(self.session)
@@ -40,4 +50,47 @@ class ThreadService:
         if snapshot is None:
             _, snapshot = ensure_demo_user(self.session)
             self.session.commit()
-        return ThreadAggregate(thread=thread, current_snapshot=snapshot)
+        understanding = (
+            self.workflow.get_understanding(thread.active_understanding_session_id, DEMO_USER_ID)
+            if thread.active_understanding_session_id
+            else None
+        )
+        current_plan = self.workflow.get_plan(thread.active_plan_id, DEMO_USER_ID) if thread.active_plan_id else None
+        plan_versions = self.workflow.plan_versions(thread.id)
+        latest_action = self.workflow.latest_action_result(thread.id)
+        return ThreadAggregate(
+            thread=thread,
+            active_understanding_session=(
+                UnderstandingSessionRead.model_validate(understanding) if understanding else None
+            ),
+            current_answers=(
+                [AnswerRead.model_validate(answer) for answer in self.workflow.current_answers(understanding.id)]
+                if understanding
+                else []
+            ),
+            understanding_summary=self._understanding_summary(understanding),
+            recent_corrections=[
+                CorrectionRead.model_validate(correction) for correction in self.workflow.corrections(thread.id)
+            ],
+            current_plan=self._plan_read(current_plan) if current_plan else None,
+            plan_versions=[self._plan_read(plan) for plan in plan_versions],
+            latest_action_result=ActionResultRead.model_validate(latest_action) if latest_action else None,
+            current_snapshot=snapshot,
+        )
+
+    def _plan_read(self, plan) -> PlanRead:
+        result = PlanRead.model_validate(plan)
+        result.items = [PlanItemRead.model_validate(item) for item in self.workflow.plan_items(plan.id)]
+        return result
+
+    @staticmethod
+    def _understanding_summary(understanding) -> UnderstandingSummaryRead | None:
+        if understanding is None or understanding.real_goal is None:
+            return None
+        return UnderstandingSummaryRead(
+            real_goal=understanding.real_goal,
+            foundation=understanding.foundation or "",
+            constraints=understanding.constraints_summary or "",
+            tension=understanding.tension or "",
+            uncertain=understanding.uncertain or "",
+        )
