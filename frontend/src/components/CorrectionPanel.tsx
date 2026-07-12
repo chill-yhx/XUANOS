@@ -4,9 +4,14 @@ import { PrimaryButton } from './PrimaryButton'
 import { SecondaryButton } from './SecondaryButton'
 import { WarningBanner } from './WarningBanner'
 
-const reasons: PlanModificationReason[] = [
-  '时间冲突', '资源限制', '能力限制', '身体或安全原因',
-  '个人偏好', '不认可系统判断', '其他',
+const reasons: Array<{ code: PlanModificationReason; label: string }> = [
+  { code: 'time_conflict', label: '时间冲突' },
+  { code: 'resource_limit', label: '资源限制' },
+  { code: 'ability_limit', label: '能力限制' },
+  { code: 'health_or_safety', label: '身体或安全原因' },
+  { code: 'personal_preference', label: '个人偏好' },
+  { code: 'reject_system_judgment', label: '不认可系统判断' },
+  { code: 'other', label: '其他' },
 ]
 
 interface CorrectionPanelProps {
@@ -38,7 +43,7 @@ export function CorrectionPanel({ systemRecommendation, currentAction, onConfirm
       </div>
       <div className="modification-reasons" aria-label="修改原因">
         {reasons.map((item) => (
-          <button key={item} type="button" className={`choice-button ${reason === item ? 'is-active' : ''}`} onClick={() => setReason(item)}>{item}</button>
+          <button key={item.code} type="button" className={`choice-button ${reason === item.code ? 'is-active' : ''}`} onClick={() => setReason(item.code)}>{item.label}</button>
         ))}
       </div>
       <WarningBanner tone="impact">预计影响：范围或完成时间可能变化。此部分为用户最终选择，并非 XUANOS 当前首选建议。</WarningBanner>

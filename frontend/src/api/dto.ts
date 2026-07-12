@@ -1,0 +1,169 @@
+export interface ApiEnvelope<T> {
+  data: T
+  meta: {
+    request_id: string
+    next_cursor: string | null
+  }
+}
+
+export interface ThreadDto {
+  id: string
+  user_id: string
+  title: string
+  status: string
+  current_step: string
+  phase: string
+  active_understanding_session_id: string | null
+  active_plan_id: string | null
+  last_activity_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SnapshotDto {
+  id: string
+  user_id: string
+  version: number
+  source_thread_id: string | null
+  source_action_result_id: string | null
+  current_vector: string
+  current_stage: string
+  current_action: string
+  reality_boundaries: string[]
+  effective_patterns: Array<Record<string, unknown>>
+  hypotheses: Array<Record<string, unknown>>
+  recent_revisions: string[]
+  user_corrections: string[]
+  revision_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface UnderstandingSessionDto {
+  id: string
+  thread_id: string
+  user_id: string
+  previous_session_id: string | null
+  expression_mode: string
+  status: string
+  user_input: string | null
+  current_question_index: number
+  summary_version: number
+  confirmed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AnswerDto {
+  id: string
+  question_id: string
+  question_text: string
+  question_order: number
+  answer_text: string
+  revision: number
+  is_current: boolean
+  answered_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface UnderstandingSummaryDto {
+  real_goal: string
+  foundation: string
+  constraints: string
+  tension: string
+  uncertain: string
+}
+
+export interface CorrectionDto {
+  id: string
+  target_type: string
+  target_id: string | null
+  assessment: string
+  previous_value: string
+  user_value: string
+  reason: string | null
+  system_handling: string | null
+  has_conflict: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanItemDto {
+  id: string
+  item_type: string
+  title: string
+  time_block: string | null
+  estimated_minutes: number | null
+  difficulty: number | null
+  completion_standard: string | null
+  is_optional: boolean
+  source: string
+  is_user_modified: boolean
+  modification_note: string | null
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanDto {
+  id: string
+  root_plan_id: string
+  previous_plan_id: string | null
+  thread_id: string
+  user_id: string
+  understanding_session_id: string
+  primary_goal_id: string
+  version: number
+  status: string
+  stage: string
+  summary: string
+  single_action: string
+  completion_standard: string
+  review_condition: string
+  workload: string
+  system_recommendation: string
+  is_user_final_choice: boolean
+  user_final_choice: string | null
+  modification_reason: string | null
+  expected_impact: string | null
+  warning_level: string
+  accepted_at: string | null
+  created_at: string
+  updated_at: string
+  items: PlanItemDto[]
+}
+
+export interface ActionResultDto {
+  id: string
+  user_id: string
+  thread_id: string
+  plan_id: string
+  started: boolean
+  completed: boolean
+  progress_percent: number
+  actual_duration_minutes: number | null
+  obstacle_code: string
+  obstacle_detail: string | null
+  energy_change: string | null
+  unrealistic_part: string | null
+  original_judgment: string
+  actual_result_summary: string
+  revised_judgment: string
+  next_adjustment: string
+  submitted_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ThreadAggregateDto {
+  thread: ThreadDto
+  active_understanding_session: UnderstandingSessionDto | null
+  current_answers: AnswerDto[]
+  understanding_summary: UnderstandingSummaryDto | null
+  recent_corrections: CorrectionDto[]
+  current_plan: PlanDto | null
+  plan_versions: PlanDto[]
+  latest_action_result: ActionResultDto | null
+  current_snapshot: SnapshotDto
+}

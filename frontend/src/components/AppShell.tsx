@@ -14,6 +14,8 @@ interface AppShellProps {
 
 export function AppShell({ currentPage, onNavigate, children }: AppShellProps) {
   const { state } = useInteraction()
+  const threadStatus = state.uiThreadStatus || state.activeThread?.status || '等待校准'
+  const threadPhase = state.uiThreadPhase || state.activeThread?.phase || '视觉系统确认'
 
   return (
     <div className="app-shell">
@@ -29,12 +31,12 @@ export function AppShell({ currentPage, onNavigate, children }: AppShellProps) {
           <details>
             <summary>
               <span className="status-pulse" />
-              <span>{state.activeThread.status}</span>
+              <span>{threadStatus}</span>
               <span className="capsule-expand">+</span>
             </summary>
             <div className="capsule-detail">
-              <span>系统状态</span><strong>{state.activeThread.status}</strong>
-              <span>当前阶段</span><strong>{state.activeThread.phase}</strong>
+              <span>系统状态</span><strong>{threadStatus}</strong>
+              <span>当前阶段</span><strong>{threadPhase}</strong>
             </div>
           </details>
         </aside>

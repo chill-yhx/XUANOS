@@ -1,4 +1,5 @@
 import type { PageId } from '../types'
+import { useInteraction } from '../state/useInteraction'
 
 const labels: Record<PageId, string> = {
   home: '入口',
@@ -14,6 +15,9 @@ interface TopStatusBarProps {
 }
 
 export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
+  const { state } = useInteraction()
+  const statusLabel = state.isLoading ? 'SYSTEM SYNCING' : state.isOfflineCache ? 'OFFLINE CACHE' : 'SYSTEM ACTIVE'
+
   return (
     <header className="top-status-bar">
       <button className="status-brand" type="button" onClick={() => onNavigate('home')} aria-label="返回 XUANOS 首页">
@@ -21,7 +25,9 @@ export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
         <span className="brand-name">XUANOS</span>
       </button>
       <div className="status-meta">
-        <div className="status-line"><span className="status-pulse" />SYSTEM ACTIVE</div>
+        <div className="status-line">
+          <span className={`status-pulse ${state.isOfflineCache ? 'is-offline' : ''}`} />{statusLabel}
+        </div>
         <div className="status-divider" />
         <div className="status-context">{labels[currentPage]}</div>
       </div>

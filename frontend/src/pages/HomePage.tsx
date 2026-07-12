@@ -9,11 +9,10 @@ interface PageProps {
 }
 
 export function HomePage({ onNavigate }: PageProps) {
-  const { state, dispatch, continuePage } = useInteraction()
-  const hasProgress = state.currentStep !== 'idle'
+  const { state, continuePage } = useInteraction()
+  const hasProgress = Boolean(state.activeThreadId)
 
   const handleStart = () => {
-    if (!hasProgress) dispatch({ type: 'START_CALIBRATION' })
     onNavigate(hasProgress ? continuePage : 'understanding')
   }
   const values = [
@@ -33,10 +32,20 @@ export function HomePage({ onNavigate }: PageProps) {
         </h1>
         <p className="hero-description">先识别真实卡点，<br />再收束成唯一行动。</p>
         <div className="hero-actions">
-          <PrimaryButton onClick={handleStart}>{hasProgress ? '继续上次任务' : '开始校准'}</PrimaryButton>
+          <PrimaryButton onClick={handleStart} disabled={state.isLoading}>
+            {state.isLoading ? '连接系统' : hasProgress ? '继续上次任务' : '开始校准'}
+          </PrimaryButton>
           <SecondaryButton onClick={() => onNavigate('system')}>查看我的系统</SecondaryButton>
         </div>
-        {hasProgress && <div className="hero-session-state">{state.activeThread.phase} · {state.activeThread.status}</div>}
+        {(hasProgress || state.apiError) && (
+          <div className="hero-session-state">
+            {state.isOfflineCache && '离线缓存 · '}
+            {state.apiError && !state.isOfflineCache
+              ? state.apiError.message
+              : `${state.uiThreadPhase} · ${state.uiThreadStatus}`}
+            {state.availableThreads.length > 1 && ` · ${state.availableThreads.length} 个线程`}
+          </div>
+        )}
       </div>
       <div className="hero-visual">
         <XuanosHeartCore />

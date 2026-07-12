@@ -11,7 +11,7 @@ import './App.css'
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageId>('home')
-  const { state, dispatch } = useInteraction()
+  const { state, dispatch, startCalibration } = useInteraction()
 
   useEffect(() => {
     if (state.currentStep === 'plan_generated' && currentPage === 'understanding') {
@@ -21,12 +21,17 @@ function App() {
 
   const navigate = (page: PageId) => {
     const understandingInProgress = ['expression_mode', 'collecting_input', 'asking_question', 'reviewing_understanding', 'understanding_confirmed'].includes(state.currentStep)
+    if (page === 'understanding' && !state.activeThreadId) {
+      void startCalibration().then((created) => {
+        if (created) setCurrentPage('understanding')
+      })
+      return
+    }
     if (page === 'understanding' && state.currentStep === 'idle') {
       dispatch({ type: 'START_CALIBRATION' })
     }
     if (page === 'plan' && (!state.currentPlan || understandingInProgress)) {
-      if (state.currentStep === 'idle') dispatch({ type: 'START_CALIBRATION' })
-      setCurrentPage('understanding')
+      navigate('understanding')
       return
     }
     if (page === 'feedback' && (state.currentPlan?.status !== 'accepted' || understandingInProgress)) {

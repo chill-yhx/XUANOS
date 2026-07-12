@@ -49,7 +49,7 @@ export function FeedbackPage({ onNavigate }: PageProps) {
             <div className="revision-loading"><span className="status-pulse" />正在根据行动结果修正系统</div>
           )}
           {state.currentStep === 'system_revised' && (
-            <div className="feedback-helper">本次反馈：{state.actionFeedback.progress}% 完成，最大阻力为“{state.actionFeedback.obstacle}”。</div>
+            <div className="feedback-helper">本次反馈：{state.actionFeedback.progress}% 完成，最大阻力代码为“{state.actionFeedback.obstacleCode}”。</div>
           )}
           {state.currentStep === 'action_pending' && (
             <FeedbackForm

@@ -6,6 +6,8 @@ export interface InteractionContextValue {
   state: DemoSessionState
   dispatch: Dispatch<InteractionAction>
   resetDemo: () => void
+  startCalibration: () => Promise<boolean>
+  refreshSnapshot: () => Promise<void>
   continuePage: PageId
 }
 

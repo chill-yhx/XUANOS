@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { diaryEntries } from '../data/mockData'
 import type { PageId, SystemSection, SystemViewMode } from '../types'
 import { GlassPanel } from '../components/GlassPanel'
@@ -13,10 +13,17 @@ interface PageProps {
 }
 
 export function SystemPage({ onNavigate }: PageProps) {
-  const { state, dispatch, resetDemo } = useInteraction()
+  const { state, dispatch, refreshSnapshot, resetDemo } = useInteraction()
   const [mode, setMode] = useState<SystemViewMode>('mixed')
   const [notice, setNotice] = useState('')
-  const snapshot = state.systemSnapshot
+  const snapshot = state.serverSnapshot ?? state.systemSnapshot
+  const localCorrections = state.corrections
+    .filter((item) => item.assessment === 'system_snapshot')
+    .map((item) => `${item.target}：${item.userValue}（本地演示）`)
+
+  useEffect(() => {
+    void refreshSnapshot()
+  }, [refreshSnapshot])
 
   const systemSections: SystemSection[] = [
     {
@@ -29,12 +36,12 @@ export function SystemPage({ onNavigate }: PageProps) {
     },
     {
       id: 'working', title: '对我有效', english: 'WORKING PATTERNS', tone: 'success',
-      entries: snapshot.effectivePatterns.slice(-3),
+      entries: snapshot.effectivePatterns.slice(-3).map((item) => item.content),
       footnote: snapshot.revisionCount > 0 ? '包含本次行动产生的候选规律，仍需后续验证。' : '当前为初始候选，等待行动证据。',
     },
     {
       id: 'review', title: '系统仍在验证', english: 'UNDER REVIEW', tone: 'impact',
-      entries: snapshot.hypotheses.length ? snapshot.hypotheses.slice(0, 3) : ['本轮原假设已被行动结果削弱，等待新的重复证据。'],
+      entries: snapshot.hypotheses.length ? snapshot.hypotheses.slice(0, 3).map((item) => item.content) : ['本轮原假设已被行动结果削弱，等待新的重复证据。'],
     },
     {
       id: 'revision', title: '最近修正', english: 'RECENT REVISION', tone: 'gold',
@@ -42,17 +49,17 @@ export function SystemPage({ onNavigate }: PageProps) {
     },
     {
       id: 'corrections', title: '用户纠正', english: 'USER CORRECTIONS', tone: 'muted',
-      entries: snapshot.userCorrections.slice(0, 4),
+      entries: [...localCorrections, ...snapshot.userCorrections].slice(0, 4),
     },
   ]
 
   const handleAction = (action: string, section: SystemSection) => {
     dispatch({ type: 'ADD_SYSTEM_CORRECTION', action, section })
-    setNotice(`已记录：“${section.title}”被标记为“${action}”。`)
+    setNotice(`本地演示已记录：“${section.title}”被标记为“${action}”。纠正 API 将在后续批次接入。`)
   }
 
   const handleReset = () => {
-    if (!window.confirm('重置 demo-user 的全部演示进度？计划版本、反馈和纠正记录都会恢复为初始值。')) return
+    if (!window.confirm('重置本地演示进度？本轮不会删除服务端线程与快照。')) return
     resetDemo()
     onNavigate('home')
   }
@@ -78,6 +85,13 @@ export function SystemPage({ onNavigate }: PageProps) {
 
       {snapshot.revisionCount > 0 && (
         <WarningBanner tone="gold">我的系统已经因为这次反馈发生变化。当前阶段与唯一行动已更新。</WarningBanner>
+      )}
+
+      {state.isOfflineCache && (
+        <WarningBanner tone="impact">离线缓存 · 当前显示最近一次成功同步的用户快照。</WarningBanner>
+      )}
+      {state.apiError && !state.serverSnapshot && (
+        <WarningBanner tone="risk">服务端快照不可用。本地 Mock 仅用于界面演示，不作为个人系统事实。</WarningBanner>
       )}
 
       <GlassPanel

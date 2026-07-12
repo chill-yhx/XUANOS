@@ -83,15 +83,15 @@ export const timeBlocks: TimeBlock[] = [
 ]
 
 export const feedbackObstacles = [
-  '行动不明确',
-  '目标不认可',
-  '环境干扰',
-  '临时意外',
-  '他人影响',
-  '情绪变化',
-  '精力不足',
-  '能力不足',
-  '其他',
+  { code: 'action_unclear', label: '行动不明确' },
+  { code: 'goal_rejected', label: '目标不认可' },
+  { code: 'environment', label: '环境干扰' },
+  { code: 'unexpected_event', label: '临时意外' },
+  { code: 'other_people', label: '他人影响' },
+  { code: 'emotion_change', label: '情绪变化' },
+  { code: 'low_energy', label: '精力不足' },
+  { code: 'ability_limit', label: '能力不足' },
+  { code: 'other', label: '其他' },
 ]
 
 export const systemSections: SystemSection[] = [

@@ -127,6 +127,18 @@
   box-shadow: 0 0 12px rgba(143, 175, 122, 0.75);
 }
 
+.status-pulse.is-offline {
+  background: var(--impact);
+  box-shadow: 0 0 12px rgba(216, 155, 69, 0.55);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.48;
+  transform: none;
+}
+
 .status-actions {
   gap: 8px;
 }
