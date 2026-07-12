@@ -1,0 +1,50 @@
+:root {
+  color: #f3efe5;
+  background: #020302;
+  font-family: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --font-display: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --gold: #d9c38f;
+  --gold-bright: #fff0bd;
+  --gold-muted: #72582d;
+  --gold-weak: rgba(217, 195, 143, 0.14);
+  --text-main: #f3efe5;
+  --text-secondary: #c9c3b8;
+  --text-muted: #8e887d;
+  --text-weak: #5a554d;
+  --border-gold: rgba(217, 195, 143, 0.12);
+  --border-subtle: rgba(243, 239, 229, 0.06);
+  --success: #8faf7a;
+  --impact: #d89b45;
+  --risk: #b75c4a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: #020302;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
