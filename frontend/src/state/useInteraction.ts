@@ -17,6 +17,10 @@ export interface InteractionContextValue {
   submitInitialInput: () => Promise<boolean>
   submitUnderstandingAnswer: () => Promise<boolean>
   confirmUnderstanding: (assessment: UnderstandingAssessment, correction?: string) => Promise<boolean>
+  createCurrentPlan: () => Promise<boolean>
+  reviseCurrentPlan: () => Promise<boolean>
+  acceptCurrentPlan: () => Promise<boolean>
+  refreshActiveThread: () => Promise<boolean>
   continuePage: PageId
 }
 

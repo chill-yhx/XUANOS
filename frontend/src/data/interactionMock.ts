@@ -63,6 +63,17 @@ export function createInitialSession(): DemoSessionState {
     corrections: [],
     currentPlan: null,
     planVersions: [],
+    activePlanId: null,
+    planRequestStatus: 'idle',
+    planApiError: null,
+    planSource: 'mock',
+    lastSuccessfulPlanAt: null,
+    lastViewedPlanId: null,
+    planModificationDraft: {
+      reason: null,
+      userChoice: '',
+      expectedImpactAcknowledged: false,
+    },
     actionFeedback: { ...initialFeedback },
     systemRevision: null,
     systemSnapshot: {

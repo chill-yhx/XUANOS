@@ -87,6 +87,15 @@ function publicApiError(error: ApiError): { code: string; message: string } {
   if (error.code === 'DUPLICATE_SUBMISSION') {
     return { code: error.code, message: '检测到重复提交，请确认内容后重试。' }
   }
+  if (error.code === 'VERSION_CONFLICT') {
+    return { code: error.code, message: '计划版本已经变化，请同步最新版本后重试。' }
+  }
+  if (error.code === 'UNDERSTANDING_NOT_CONFIRMED') {
+    return { code: error.code, message: '服务端理解尚未确认，当前不能生成计划。' }
+  }
+  if (error.code === 'PLAN_NOT_ACCEPTED') {
+    return { code: error.code, message: '当前计划尚未接受，不能进入行动阶段。' }
+  }
   if (
     error.code === 'INTERNAL_ERROR'
     || error.code === 'INVALID_API_RESPONSE'

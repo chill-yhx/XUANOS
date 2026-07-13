@@ -30,10 +30,13 @@ export function UnderstandingPage({ onNavigate }: PageProps) {
     submitInitialInput,
     submitUnderstandingAnswer,
     confirmUnderstanding,
+    createCurrentPlan,
+    refreshActiveThread,
   } = useInteraction()
   const question = state.currentQuestion
   const summary = state.serverUnderstanding ?? state.understanding
   const isLoading = state.understandingRequestStatus === 'loading'
+  const isCreatingPlan = state.planRequestStatus === 'loading'
   const assessment = state.understandingAssessmentDraft
   const correction = state.understandingCorrectionDraft
   const isPastUnderstanding = [
@@ -206,13 +209,22 @@ export function UnderstandingPage({ onNavigate }: PageProps) {
             <div><span className="metric-label">系统仍在验证</span><p>{summary.uncertain}</p></div>
           </div>
           <WarningBanner tone="gold">这是服务端保存的起点版本，不是固定定义。</WarningBanner>
+          {state.planApiError && <WarningBanner tone="impact">{state.planApiError.message}</WarningBanner>}
           <div className="button-row">
             <PrimaryButton
-              onClick={() => { dispatch({ type: 'GENERATE_PLAN' }); onNavigate('plan') }}
-              disabled={state.understandingSource !== 'api' || state.isOfflineCache}
+              onClick={() => void createCurrentPlan().then((created) => created && onNavigate('plan'))}
+              disabled={state.understandingSource !== 'api' || state.isOfflineCache || isCreatingPlan}
             >
-              进入 Mock 计划裁决
+              {isCreatingPlan ? '正在生成 Plan v1' : state.planApiError ? '重试生成计划' : '生成计划裁决'}
             </PrimaryButton>
+            {state.planApiError && (
+              <SecondaryButton
+                onClick={() => void refreshActiveThread()}
+                disabled={isCreatingPlan}
+              >
+                {isCreatingPlan ? '正在同步' : '同步服务端进度'}
+              </SecondaryButton>
+            )}
             <SecondaryButton onClick={() => onNavigate('home')}>暂时离开</SecondaryButton>
           </div>
         </GlassPanel>

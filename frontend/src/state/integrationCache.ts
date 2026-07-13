@@ -50,13 +50,20 @@ interface IntegrationCache {
     | 'understandingAssessmentDraft'
     | 'understandingCorrectionDraft'
   >
+  plans: Pick<
+    DemoSessionState,
+    | 'activePlanId'
+    | 'currentPlan'
+    | 'planVersions'
+    | 'lastSuccessfulPlanAt'
+    | 'lastViewedPlanId'
+  >
+  planDrafts: Pick<DemoSessionState, 'planModificationDraft'>
   mock: Pick<
     DemoSessionState,
     | 'currentStep'
     | 'uiThreadStatus'
     | 'uiThreadPhase'
-    | 'currentPlan'
-    | 'planVersions'
     | 'actionFeedback'
     | 'systemRevision'
     | 'systemSnapshot'
@@ -71,6 +78,8 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   const server = parsed.server
   const cachedUnderstanding = parsed.understanding
   const drafts = parsed.drafts
+  const plans = parsed.plans
+  const planDrafts = parsed.planDrafts
   const mock = parsed.mock
   const serverSnapshot = server?.serverSnapshot ?? null
   const activeThread = server?.activeThread ?? null
@@ -85,6 +94,9 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     ?? (currentStep === 'asking_question' ? understandingQuestionAt(currentQuestionIndex) : null)
   const serverUnderstanding = cachedUnderstanding?.serverUnderstanding ?? legacyMock?.understanding ?? null
   const hasUnderstandingCache = Boolean(cachedUnderstanding?.understandingSessionId || serverUnderstanding)
+  const cachedCurrentPlan = plans?.currentPlan ?? null
+  const cachedPlanVersions = plans?.planVersions ?? []
+  const hasPlanCache = Boolean(cachedCurrentPlan || cachedPlanVersions.length)
   return {
     ...fallback,
     ...mock,
@@ -122,7 +134,18 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     currentQuestionIndex,
     currentQuestion,
     corrections: cachedUnderstanding?.corrections ?? legacyMock?.corrections ?? [],
-    planVersions: mock?.planVersions ?? [],
+    currentPlan: cachedCurrentPlan,
+    planVersions: cachedPlanVersions,
+    activePlanId: plans?.activePlanId ?? cachedCurrentPlan?.id ?? null,
+    planRequestStatus: 'idle',
+    planApiError: null,
+    planSource: hasPlanCache ? 'cache' : 'mock',
+    lastSuccessfulPlanAt: plans?.lastSuccessfulPlanAt ?? cachedCurrentPlan?.updatedAt ?? cachedCurrentPlan?.createdAt ?? null,
+    lastViewedPlanId: plans?.lastViewedPlanId ?? cachedCurrentPlan?.id ?? null,
+    planModificationDraft: {
+      ...fallback.planModificationDraft,
+      ...planDrafts?.planModificationDraft,
+    },
     actionFeedback: { ...fallback.actionFeedback, ...mock?.actionFeedback },
   }
 }
@@ -149,6 +172,9 @@ function restoreLegacy(fallback: DemoSessionState): DemoSessionState {
       corrections: legacy.corrections ?? [],
       currentPlan: legacy.currentPlan ?? null,
       planVersions: legacy.planVersions ?? [],
+      activePlanId: legacy.currentPlan?.id ?? null,
+      planSource: legacy.currentPlan ? 'mock' : fallback.planSource,
+      lastViewedPlanId: legacy.currentPlan?.id ?? null,
       systemRevision: legacy.systemRevision ?? null,
     }
   } catch {
@@ -200,12 +226,20 @@ export function writeIntegrationCache(state: DemoSessionState) {
       understandingAssessmentDraft: state.understandingAssessmentDraft,
       understandingCorrectionDraft: state.understandingCorrectionDraft,
     },
+    plans: {
+      activePlanId: state.activePlanId,
+      currentPlan: state.currentPlan,
+      planVersions: state.planVersions,
+      lastSuccessfulPlanAt: state.lastSuccessfulPlanAt,
+      lastViewedPlanId: state.lastViewedPlanId,
+    },
+    planDrafts: {
+      planModificationDraft: state.planModificationDraft,
+    },
     mock: {
       currentStep: state.currentStep,
       uiThreadStatus: state.uiThreadStatus,
       uiThreadPhase: state.uiThreadPhase,
-      currentPlan: state.currentPlan,
-      planVersions: state.planVersions,
       actionFeedback: state.actionFeedback,
       systemRevision: state.systemRevision,
       systemSnapshot: state.systemSnapshot,

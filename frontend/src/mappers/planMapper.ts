@@ -1,5 +1,23 @@
-import type { PlanDto, PlanItemDto } from '../api/dto'
-import type { PlanItem, PlanModificationReason, PlanVersion } from '../types'
+import type {
+  PlanAcceptRequestDto,
+  PlanAcceptResultDto,
+  PlanCreateRequestDto,
+  PlanCreateResultDto,
+  PlanDto,
+  PlanItemDto,
+  PlanReviseRequestDto,
+  PlanReviseResultDto,
+} from '../api/dto'
+import type {
+  InteractionStep,
+  PlanAcceptResult,
+  PlanCreateResult,
+  PlanItem,
+  PlanModificationReason,
+  PlanReviseResult,
+  PlanVersion,
+} from '../types'
+import { snapshotMapper } from './snapshotMapper'
 
 const reasons = new Set<PlanModificationReason>([
   'time_conflict',
@@ -11,7 +29,17 @@ const reasons = new Set<PlanModificationReason>([
   'other',
 ])
 
-function planItemMapper(dto: PlanItemDto): PlanItem {
+const planSteps = new Set<InteractionStep>([
+  'plan_generated',
+  'plan_modified',
+  'plan_accepted',
+])
+
+function planStepMapper(value: string, fallback: InteractionStep): InteractionStep {
+  return planSteps.has(value as InteractionStep) ? value as InteractionStep : fallback
+}
+
+export function planItemMapper(dto: PlanItemDto): PlanItem {
   return {
     id: dto.id,
     itemType: dto.item_type,
@@ -67,5 +95,76 @@ export function planMapper(dto: PlanDto, mainGoal: string): PlanVersion {
     acceptedAt: dto.accepted_at,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
+  }
+}
+
+export interface CreatePlanInput {
+  threadId: string
+  understandingSessionId: string
+  mainGoal: string
+}
+
+export interface RevisePlanInput {
+  plan: PlanVersion
+  reason: PlanModificationReason
+  userChoice: string
+  expectedImpactAcknowledged: boolean
+  mainGoal: string
+}
+
+export interface AcceptPlanInput {
+  plan: PlanVersion
+  mainGoal: string
+}
+
+export function toPlanCreateRequest(input: CreatePlanInput): PlanCreateRequestDto {
+  return {
+    thread_id: input.threadId,
+    understanding_session_id: input.understandingSessionId,
+  }
+}
+
+export function fromPlanCreateResult(
+  dto: PlanCreateResultDto,
+  mainGoal: string,
+): PlanCreateResult {
+  return {
+    plan: planMapper(dto.plan, mainGoal),
+    currentStep: planStepMapper(dto.current_step, 'plan_generated'),
+  }
+}
+
+export function toPlanReviseRequest(input: RevisePlanInput): PlanReviseRequestDto {
+  return {
+    reason: input.reason,
+    user_final_choice: input.userChoice.trim(),
+    expected_impact_acknowledged: input.expectedImpactAcknowledged,
+    expected_version: input.plan.version,
+  }
+}
+
+export function fromPlanReviseResult(
+  dto: PlanReviseResultDto,
+  mainGoal: string,
+): PlanReviseResult {
+  return {
+    previousPlan: planMapper(dto.previous_plan, mainGoal),
+    currentPlan: planMapper(dto.current_plan, mainGoal),
+    currentStep: planStepMapper(dto.current_step, 'plan_modified'),
+  }
+}
+
+export function toPlanAcceptRequest(input: AcceptPlanInput): PlanAcceptRequestDto {
+  return { expected_version: input.plan.version }
+}
+
+export function fromPlanAcceptResult(
+  dto: PlanAcceptResultDto,
+  mainGoal: string,
+): PlanAcceptResult {
+  return {
+    plan: planMapper(dto.plan, mainGoal),
+    snapshot: snapshotMapper(dto.snapshot),
+    currentStep: planStepMapper(dto.current_step, 'plan_accepted'),
   }
 }

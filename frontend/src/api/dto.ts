@@ -176,6 +176,39 @@ export interface PlanDto {
   items: PlanItemDto[]
 }
 
+export interface PlanCreateRequestDto {
+  thread_id: string
+  understanding_session_id: string
+}
+
+export interface PlanReviseRequestDto {
+  reason: string
+  user_final_choice: string
+  expected_impact_acknowledged: boolean
+  expected_version: number
+}
+
+export interface PlanAcceptRequestDto {
+  expected_version: number
+}
+
+export interface PlanCreateResultDto {
+  plan: PlanDto
+  current_step: string
+}
+
+export interface PlanReviseResultDto {
+  previous_plan: PlanDto
+  current_plan: PlanDto
+  current_step: string
+}
+
+export interface PlanAcceptResultDto {
+  plan: PlanDto
+  snapshot: SnapshotDto
+  current_step: string
+}
+
 export interface ActionResultDto {
   id: string
   user_id: string

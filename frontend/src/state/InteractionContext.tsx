@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { toApiErrorState } from '../api/apiErrors'
 import { getCurrentSnapshot } from '../services/snapshotService'
+import {
+  acceptPlan as acceptPlanOnServer,
+  createPlan as createPlanOnServer,
+  revisePlan as revisePlanOnServer,
+} from '../services/planService'
 import { createThread, getThread, listThreads } from '../services/threadService'
 import {
   analyzeUnderstanding,
@@ -35,6 +40,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const createThreadRequestRef = useRef<Promise<boolean> | null>(null)
   const snapshotRequestRef = useRef<Promise<void> | null>(null)
   const understandingRequestRef = useRef<Promise<boolean> | null>(null)
+  const planRequestRef = useRef<Promise<boolean> | null>(null)
 
   useEffect(() => {
     stateRef.current = state
@@ -250,6 +256,137 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     [failUnderstandingGuard],
   )
 
+  const failPlanGuard = useCallback((message: string) => {
+    const error: ApiErrorState = {
+      code: 'INVALID_FLOW_STATE',
+      message,
+      status: null,
+      requestId: null,
+    }
+    dispatch({ type: 'PLAN_REQUEST_FAILED', error })
+    return false
+  }, [])
+
+  const runPlanRequest = useCallback(async (
+    requestFactory: () => Promise<boolean>,
+  ) => {
+    if (planRequestRef.current) return planRequestRef.current
+    const request = requestFactory()
+    planRequestRef.current = request
+    try {
+      return await request
+    } finally {
+      if (planRequestRef.current === request) planRequestRef.current = null
+    }
+  }, [])
+
+  const createCurrentPlan = useCallback(async () => {
+    const current = stateRef.current
+    if (!current.activeThreadId) return failPlanGuard('请先创建真实任务线程。')
+    if (
+      current.serverStep !== 'understanding_confirmed'
+      || current.understandingStatus !== 'confirmed'
+      || !current.understandingSessionId
+      || !current.serverUnderstanding
+      || current.understandingSource !== 'api'
+    ) return failPlanGuard('服务端理解尚未确认，不能创建计划。')
+    if (current.isOfflineCache) return failPlanGuard('当前为离线缓存，恢复服务后才能创建计划。')
+    if (current.planRequestStatus === 'loading') return false
+
+    return runPlanRequest(async () => {
+      dispatch({ type: 'PLAN_REQUEST_STARTED' })
+      try {
+        const result = await createPlanOnServer({
+          threadId: current.activeThreadId!,
+          understandingSessionId: current.understandingSessionId!,
+          mainGoal: current.serverUnderstanding!.realGoal,
+        })
+        dispatch({ type: 'PLAN_CREATE_SUCCEEDED', result })
+        return true
+      } catch (error) {
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        return false
+      }
+    })
+  }, [failPlanGuard, runPlanRequest])
+
+  const reviseCurrentPlan = useCallback(async () => {
+    const current = stateRef.current
+    const plan = current.currentPlan
+    const draft = current.planModificationDraft
+    if (!plan || !current.activePlanId) return failPlanGuard('当前没有可修改的服务端计划。')
+    if (current.planSource !== 'api' || current.isOfflineCache) {
+      return failPlanGuard('当前为离线缓存，恢复服务后才能修改计划。')
+    }
+    if (!draft.reason) return failPlanGuard('请选择计划修改原因。')
+    if (!draft.userChoice.trim()) return failPlanGuard('请填写用户最终选择。')
+    if (!draft.expectedImpactAcknowledged) return failPlanGuard('请确认已了解本次修改的预计影响。')
+    if (current.planRequestStatus === 'loading') return false
+
+    return runPlanRequest(async () => {
+      dispatch({ type: 'PLAN_REQUEST_STARTED' })
+      try {
+        const result = await revisePlanOnServer({
+          plan,
+          reason: draft.reason!,
+          userChoice: draft.userChoice,
+          expectedImpactAcknowledged: draft.expectedImpactAcknowledged,
+          mainGoal: current.serverUnderstanding?.realGoal ?? plan.mainGoal,
+        })
+        dispatch({ type: 'PLAN_REVISE_SUCCEEDED', result })
+        return true
+      } catch (error) {
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        return false
+      }
+    })
+  }, [failPlanGuard, runPlanRequest])
+
+  const acceptCurrentPlan = useCallback(async () => {
+    const current = stateRef.current
+    const plan = current.currentPlan
+    if (!plan || !current.activePlanId) return failPlanGuard('当前没有可接受的服务端计划。')
+    if (current.planSource !== 'api' || current.isOfflineCache) {
+      return failPlanGuard('当前为离线缓存，恢复服务后才能接受计划。')
+    }
+    if (!['plan_generated', 'plan_modified'].includes(current.serverStep)) {
+      return failPlanGuard('当前服务端流程状态不允许接受计划。')
+    }
+    if (current.planRequestStatus === 'loading') return false
+
+    return runPlanRequest(async () => {
+      dispatch({ type: 'PLAN_REQUEST_STARTED' })
+      try {
+        const result = await acceptPlanOnServer({
+          plan,
+          mainGoal: current.serverUnderstanding?.realGoal ?? plan.mainGoal,
+        })
+        dispatch({ type: 'PLAN_ACCEPT_SUCCEEDED', result })
+        return true
+      } catch (error) {
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        return false
+      }
+    })
+  }, [failPlanGuard, runPlanRequest])
+
+  const refreshActiveThread = useCallback(async () => {
+    const threadId = stateRef.current.activeThreadId
+    if (!threadId) return failPlanGuard('当前没有可恢复的任务线程。')
+    return runPlanRequest(async () => {
+      dispatch({ type: 'PLAN_REQUEST_STARTED' })
+      try {
+        const aggregate = await getThread(threadId)
+        dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+        dispatch({ type: 'API_SYNC_COMPLETED' })
+        return true
+      } catch (error) {
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        return false
+      }
+    })
+  }, [failPlanGuard, runPlanRequest])
+
   const resetDemo = () => {
     clearIntegrationCache()
     dispatch({ type: 'RESET_DEMO_DATA' })
@@ -267,6 +404,10 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         submitInitialInput,
         submitUnderstandingAnswer,
         confirmUnderstanding,
+        createCurrentPlan,
+        reviseCurrentPlan,
+        acceptCurrentPlan,
+        refreshActiveThread,
         continuePage: pageForStep(state.currentStep),
       }}
     >

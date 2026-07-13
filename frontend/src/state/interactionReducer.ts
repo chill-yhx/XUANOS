@@ -1,7 +1,5 @@
 import {
   createInitialSession,
-  createModifiedPlan,
-  generatePlan,
   reviseSystem,
 } from '../data/interactionMock'
 import { understandingQuestions } from '../data/understandingQuestions'
@@ -11,7 +9,11 @@ import type {
   DemoSessionState,
   ExpressionMode,
   FeedbackPayload,
-  PlanModificationReason,
+  PlanAcceptResult,
+  PlanCreateResult,
+  PlanModificationDraft,
+  PlanReviseResult,
+  PlanVersion,
   SystemSection,
   SystemSnapshot,
   ThreadAggregateState,
@@ -39,9 +41,13 @@ export type InteractionAction =
   | { type: 'UNDERSTANDING_CONFIRM_SUCCEEDED'; result: UnderstandingConfirmResult }
   | { type: 'UNDERSTANDING_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'GO_TO_PREVIOUS_QUESTION' }
-  | { type: 'GENERATE_PLAN' }
-  | { type: 'MODIFY_PLAN'; reason: PlanModificationReason; userChoice: string }
-  | { type: 'ACCEPT_PLAN' }
+  | { type: 'UPDATE_PLAN_MODIFICATION_DRAFT'; value: Partial<PlanModificationDraft> }
+  | { type: 'SELECT_PLAN_VERSION'; planId: string }
+  | { type: 'PLAN_REQUEST_STARTED' }
+  | { type: 'PLAN_CREATE_SUCCEEDED'; result: PlanCreateResult }
+  | { type: 'PLAN_REVISE_SUCCEEDED'; result: PlanReviseResult }
+  | { type: 'PLAN_ACCEPT_SUCCEEDED'; result: PlanAcceptResult }
+  | { type: 'PLAN_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'REOPEN_QUESTIONS' }
   | { type: 'START_ACTION' }
   | { type: 'UPDATE_FEEDBACK_DRAFT'; value: Partial<FeedbackPayload> }
@@ -66,14 +72,22 @@ function updateThreadStep(
   state: DemoSessionState,
   step: DemoSessionState['serverStep'],
   sessionId = state.understandingSessionId,
+  planId = state.activePlanId,
 ) {
   if (!state.activeThread) return { activeThread: null, availableThreads: state.availableThreads }
   const activeThread = {
     ...state.activeThread,
     currentStep: step,
     activeUnderstandingSessionId: sessionId,
+    activePlanId: planId,
   }
   return { activeThread, availableThreads: mergeThread(state.availableThreads, activeThread) }
+}
+
+function mergePlans(plans: PlanVersion[], ...updates: PlanVersion[]) {
+  const byId = new Map(plans.map((plan) => [plan.id, plan]))
+  updates.forEach((plan) => byId.set(plan.id, plan))
+  return [...byId.values()].sort((left, right) => left.version - right.version)
 }
 
 export function interactionReducer(state: DemoSessionState, action: InteractionAction): DemoSessionState {
@@ -89,6 +103,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         isOfflineCache: Boolean(state.serverSnapshot || state.activeThread),
         dataSource: state.serverSnapshot || state.activeThread ? 'cache' : 'mock',
         understandingSource: state.serverUnderstanding ? 'cache' : state.understandingSource,
+        planSource: state.currentPlan && state.planSource !== 'mock' ? 'cache' : state.planSource,
       }
 
     case 'API_SYNC_COMPLETED':
@@ -138,6 +153,19 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         currentQuestion: null,
         understanding: null,
         corrections: [],
+        currentPlan: null,
+        planVersions: [],
+        activePlanId: null,
+        planRequestStatus: 'idle',
+        planApiError: null,
+        planSource: 'mock',
+        lastSuccessfulPlanAt: null,
+        lastViewedPlanId: null,
+        planModificationDraft: {
+          reason: null,
+          userChoice: '',
+          expectedImpactAcknowledged: false,
+        },
         isLoading: false,
         apiError: null,
         isOfflineCache: false,
@@ -201,6 +229,18 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         corrections: useServerWorkflow ? aggregate.corrections : state.corrections,
         currentPlan: useServerWorkflow ? aggregate.currentPlan : state.currentPlan,
         planVersions: useServerWorkflow ? aggregate.planVersions : state.planVersions,
+        activePlanId: useServerWorkflow ? aggregate.thread.activePlanId : state.activePlanId,
+        planRequestStatus: useServerWorkflow && aggregate.currentPlan ? 'success' : state.planRequestStatus,
+        planApiError: null,
+        planSource: useServerWorkflow && aggregate.currentPlan ? 'api' : state.planSource,
+        lastSuccessfulPlanAt: useServerWorkflow && aggregate.currentPlan
+          ? aggregate.currentPlan.updatedAt ?? aggregate.currentPlan.createdAt
+          : state.lastSuccessfulPlanAt,
+        lastViewedPlanId: useServerWorkflow && aggregate.currentPlan
+          ? aggregate.planVersions.some((plan) => plan.id === state.lastViewedPlanId)
+            ? state.lastViewedPlanId
+            : aggregate.currentPlan.id
+          : state.lastViewedPlanId,
         latestActionResult: aggregate.latestActionResult,
         systemRevision: useServerWorkflow ? aggregate.systemRevision : state.systemRevision,
         serverSnapshot: aggregate.snapshot,
@@ -374,68 +414,115 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         }
       }
 
-    case 'GENERATE_PLAN': {
-      if (
-        state.currentStep !== 'understanding_confirmed'
-        || state.serverStep !== 'understanding_confirmed'
-        || state.understandingStatus !== 'confirmed'
-        || !state.serverUnderstanding
-        || state.understandingSource !== 'api'
-        || state.isOfflineCache
-      ) return state
-      const plan = generatePlan(state)
-      const previousVersions = state.planVersions.map((item) =>
-        item.id === state.currentPlan?.id ? { ...item, status: 'superseded' as const } : item,
-      )
+    case 'UPDATE_PLAN_MODIFICATION_DRAFT':
+      return {
+        ...state,
+        planModificationDraft: { ...state.planModificationDraft, ...action.value },
+      }
+
+    case 'SELECT_PLAN_VERSION':
+      if (!state.planVersions.some((plan) => plan.id === action.planId)) return state
+      return { ...state, lastViewedPlanId: action.planId }
+
+    case 'PLAN_REQUEST_STARTED':
+      return { ...state, planRequestStatus: 'loading', planApiError: null }
+
+    case 'PLAN_CREATE_SUCCEEDED': {
+      const { plan, currentStep } = action.result
+      const threadState = updateThreadStep(state, currentStep, state.understandingSessionId, plan.id)
       return withThread(
         {
           ...state,
+          ...threadState,
+          currentStep,
+          serverStep: currentStep,
           currentPlan: plan,
-          planVersions: [...previousVersions, plan],
-          currentStep: 'plan_generated',
+          planVersions: mergePlans(state.planVersions, plan),
+          activePlanId: plan.id,
+          planRequestStatus: 'success',
+          planApiError: null,
+          planSource: 'api',
+          lastSuccessfulPlanAt: plan.updatedAt ?? plan.createdAt,
+          lastViewedPlanId: plan.id,
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
         },
         '等待计划确认',
         '计划裁决',
       )
     }
 
-    case 'MODIFY_PLAN': {
-      const plan = createModifiedPlan(state, action.reason, action.userChoice.trim())
-      if (!plan || !action.userChoice.trim()) return state
-      const previousVersions = state.planVersions.map((item) =>
-        item.id === state.currentPlan?.id ? { ...item, status: 'superseded' as const } : item,
-      )
+    case 'PLAN_REVISE_SUCCEEDED': {
+      const { previousPlan, currentPlan, currentStep } = action.result
+      const threadState = updateThreadStep(state, currentStep, state.understandingSessionId, currentPlan.id)
       return withThread(
         {
           ...state,
-          currentPlan: plan,
-          planVersions: [...previousVersions, plan],
-          currentStep: 'plan_modified',
+          ...threadState,
+          currentStep,
+          serverStep: currentStep,
+          currentPlan,
+          planVersions: mergePlans(state.planVersions, previousPlan, currentPlan),
+          activePlanId: currentPlan.id,
+          planRequestStatus: 'success',
+          planApiError: null,
+          planSource: 'api',
+          lastSuccessfulPlanAt: currentPlan.updatedAt ?? currentPlan.createdAt,
+          lastViewedPlanId: currentPlan.id,
+          planModificationDraft: {
+            reason: null,
+            userChoice: '',
+            expectedImpactAcknowledged: false,
+          },
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
         },
         '计划已修改',
         '等待接受',
       )
     }
 
-    case 'ACCEPT_PLAN': {
-      if (!state.currentPlan || !['plan_generated', 'plan_modified'].includes(state.currentStep)) return state
-      const acceptedPlan = { ...state.currentPlan, status: 'accepted' as const }
+    case 'PLAN_ACCEPT_SUCCEEDED': {
+      const { plan, snapshot, currentStep } = action.result
+      const threadState = updateThreadStep(state, currentStep, state.understandingSessionId, plan.id)
       return withThread(
         {
           ...state,
-          currentPlan: acceptedPlan,
-          planVersions: state.planVersions.map((item) => item.id === acceptedPlan.id ? acceptedPlan : item),
-          currentStep: 'plan_accepted',
-          systemSnapshot: {
-            ...state.systemSnapshot,
-            currentVector: acceptedPlan.mainGoal,
-            currentStage: acceptedPlan.stage,
-            currentAction: acceptedPlan.singleAction,
-          },
+          ...threadState,
+          currentStep,
+          serverStep: currentStep,
+          currentPlan: plan,
+          planVersions: mergePlans(state.planVersions, plan),
+          activePlanId: plan.id,
+          planRequestStatus: 'success',
+          planApiError: null,
+          planSource: 'api',
+          lastSuccessfulPlanAt: plan.updatedAt ?? plan.createdAt,
+          lastViewedPlanId: plan.id,
+          serverSnapshot: snapshot,
+          snapshotId: snapshot.id,
+          snapshotVersion: snapshot.version,
+          systemSnapshot: snapshot,
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
         },
         '计划已接受',
-        acceptedPlan.stage,
+        plan.stage,
       )
+    }
+
+    case 'PLAN_REQUEST_FAILED': {
+      const offline = ['NETWORK_ERROR', 'TIMEOUT'].includes(action.error.code)
+      return {
+        ...state,
+        planRequestStatus: 'error',
+        planApiError: action.error,
+        planSource: offline && state.currentPlan ? 'cache' : state.planSource,
+        isOfflineCache: offline && Boolean(state.currentPlan || state.activeThread),
+      }
     }
 
     case 'REOPEN_QUESTIONS':
@@ -468,7 +555,12 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
       )
 
     case 'START_ACTION':
-      if (state.currentPlan?.status !== 'accepted') return state
+      if (
+        state.currentPlan?.status !== 'accepted'
+        || state.serverStep !== 'plan_accepted'
+        || state.planSource !== 'api'
+        || state.isOfflineCache
+      ) return state
       return withThread(
         { ...state, currentStep: 'action_pending' },
         '等待行动反馈',

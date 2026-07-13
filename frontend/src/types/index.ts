@@ -203,6 +203,29 @@ export interface PlanVersion {
   updatedAt?: string
 }
 
+export interface PlanModificationDraft {
+  reason: PlanModificationReason | null
+  userChoice: string
+  expectedImpactAcknowledged: boolean
+}
+
+export interface PlanCreateResult {
+  plan: PlanVersion
+  currentStep: InteractionStep
+}
+
+export interface PlanReviseResult {
+  previousPlan: PlanVersion
+  currentPlan: PlanVersion
+  currentStep: InteractionStep
+}
+
+export interface PlanAcceptResult {
+  plan: PlanVersion
+  snapshot: SystemSnapshot
+  currentStep: InteractionStep
+}
+
 export interface SystemRevision {
   originalJudgment: string
   actualResult: string
@@ -334,6 +357,13 @@ export interface DemoSessionState {
   corrections: CorrectionRecord[]
   currentPlan: PlanVersion | null
   planVersions: PlanVersion[]
+  activePlanId: string | null
+  planRequestStatus: RequestStatus
+  planApiError: ApiErrorState | null
+  planSource: DataSource
+  lastSuccessfulPlanAt: string | null
+  lastViewedPlanId: string | null
+  planModificationDraft: PlanModificationDraft
   actionFeedback: FeedbackPayload
   systemRevision: SystemRevision | null
   systemSnapshot: SystemSnapshot

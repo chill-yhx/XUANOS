@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { PlanModificationReason } from '../types'
 import { PrimaryButton } from './PrimaryButton'
 import { SecondaryButton } from './SecondaryButton'
@@ -16,15 +15,29 @@ const reasons: Array<{ code: PlanModificationReason; label: string }> = [
 
 interface CorrectionPanelProps {
   systemRecommendation: string
-  currentAction: string
-  onConfirm: (reason: PlanModificationReason, userChoice: string) => void
+  reason: PlanModificationReason | null
+  userChoice: string
+  expectedImpactAcknowledged: boolean
+  isLoading?: boolean
+  onChange: (value: {
+    reason?: PlanModificationReason
+    userChoice?: string
+    expectedImpactAcknowledged?: boolean
+  }) => void
+  onConfirm: () => void
   onClose: () => void
 }
 
-export function CorrectionPanel({ systemRecommendation, currentAction, onConfirm, onClose }: CorrectionPanelProps) {
-  const [reason, setReason] = useState<PlanModificationReason | null>(null)
-  const [userChoice, setUserChoice] = useState(currentAction)
-
+export function CorrectionPanel({
+  systemRecommendation,
+  reason,
+  userChoice,
+  expectedImpactAcknowledged,
+  isLoading = false,
+  onChange,
+  onConfirm,
+  onClose,
+}: CorrectionPanelProps) {
   return (
     <section className="correction-panel">
       <div>
@@ -38,18 +51,45 @@ export function CorrectionPanel({ systemRecommendation, currentAction, onConfirm
         </div>
         <div>
           <span className="metric-label">用户最终选择</span>
-          <textarea className="short-input" value={userChoice} onChange={(event) => setUserChoice(event.target.value)} />
+          <textarea
+            className="short-input"
+            value={userChoice}
+            onChange={(event) => onChange({ userChoice: event.target.value })}
+            disabled={isLoading}
+          />
         </div>
       </div>
       <div className="modification-reasons" aria-label="修改原因">
         {reasons.map((item) => (
-          <button key={item.code} type="button" className={`choice-button ${reason === item.code ? 'is-active' : ''}`} onClick={() => setReason(item.code)}>{item.label}</button>
+          <button
+            key={item.code}
+            type="button"
+            className={`choice-button ${reason === item.code ? 'is-active' : ''}`}
+            onClick={() => onChange({ reason: item.code })}
+            disabled={isLoading}
+          >
+            {item.label}
+          </button>
         ))}
       </div>
       <WarningBanner tone="impact">预计影响：范围或完成时间可能变化。此部分为用户最终选择，并非 XUANOS 当前首选建议。</WarningBanner>
+      <label className="impact-acknowledgement">
+        <input
+          type="checkbox"
+          checked={expectedImpactAcknowledged}
+          onChange={(event) => onChange({ expectedImpactAcknowledged: event.target.checked })}
+          disabled={isLoading}
+        />
+        <span>我已了解预计影响与复查条件</span>
+      </label>
       <div className="button-row">
-        <PrimaryButton disabled={!reason || !userChoice.trim()} onClick={() => reason && onConfirm(reason, userChoice)}>保存为新版本</PrimaryButton>
-        <SecondaryButton onClick={onClose}>取消修改</SecondaryButton>
+        <PrimaryButton
+          disabled={!reason || !userChoice.trim() || !expectedImpactAcknowledged || isLoading}
+          onClick={onConfirm}
+        >
+          {isLoading ? '正在生成新版本' : '保存为新版本'}
+        </PrimaryButton>
+        <SecondaryButton onClick={onClose} disabled={isLoading}>取消修改</SecondaryButton>
       </div>
     </section>
   )
