@@ -3,7 +3,7 @@ import type { SystemSnapshot } from '../types'
 export function createDevelopmentMockSnapshot(now: string): SystemSnapshot {
   return {
     id: 'development-mock-snapshot',
-    userId: 'demo-user',
+    userId: 'development-mock',
     version: 0,
     sourceThreadId: null,
     sourceActionResultId: null,

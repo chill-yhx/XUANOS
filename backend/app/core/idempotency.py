@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
-from app.db.seed import DEMO_USER_ID
 from app.models.idempotency import IdempotencyRecord
 
 
@@ -17,8 +16,9 @@ def request_hash(payload: dict[str, Any]) -> str:
 
 
 class IdempotencyManager:
-    def __init__(self, session: Session, route: str, key: str, payload: dict[str, Any]) -> None:
+    def __init__(self, session: Session, user_id: str, route: str, key: str, payload: dict[str, Any]) -> None:
         self.session = session
+        self.user_id = user_id
         self.route = route
         self.key = key
         self.hash = request_hash(payload)
@@ -26,7 +26,7 @@ class IdempotencyManager:
     def replay(self) -> dict[str, Any] | None:
         record = self.session.scalar(
             select(IdempotencyRecord).where(
-                IdempotencyRecord.user_id == DEMO_USER_ID,
+                IdempotencyRecord.user_id == self.user_id,
                 IdempotencyRecord.route == self.route,
                 IdempotencyRecord.key == self.key,
             )
@@ -45,7 +45,7 @@ class IdempotencyManager:
     def store(self, resource_type: str, resource_id: str, response_data: dict[str, Any]) -> None:
         self.session.add(
             IdempotencyRecord(
-                user_id=DEMO_USER_ID,
+                user_id=self.user_id,
                 route=self.route,
                 key=self.key,
                 request_hash=self.hash,

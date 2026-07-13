@@ -23,6 +23,7 @@ import type {
 import { createInitialSession, initialFeedback } from './initialState'
 
 export type InteractionAction =
+  | { type: 'AUTH_SESSION_INVALIDATED'; error: ApiErrorState }
   | { type: 'API_REQUEST_STARTED' }
   | { type: 'API_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'API_SYNC_COMPLETED' }
@@ -103,6 +104,13 @@ function mergePlans(plans: PlanVersion[], ...updates: PlanVersion[]) {
 
 export function interactionReducer(state: DemoSessionState, action: InteractionAction): DemoSessionState {
   switch (action.type) {
+    case 'AUTH_SESSION_INVALIDATED':
+      return {
+        ...createInitialSession(),
+        isLoading: false,
+        apiError: action.error,
+      }
+
     case 'API_REQUEST_STARTED':
       return { ...state, isLoading: true, apiError: null }
 

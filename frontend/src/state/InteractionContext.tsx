@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { toApiErrorState, toCorrectionApiErrorState } from '../api/apiErrors'
+import { AUTH_SESSION_INVALIDATED_EVENT } from '../api/authSession'
+import { clearIdempotencyStore } from '../api/idempotency'
 import { submitActionResult as submitActionResultOnServer } from '../services/actionResultService'
+import { ensureAuthSession } from '../services/authService'
 import { submitUserCorrection } from '../services/correctionService'
 import { getCurrentSnapshot } from '../services/snapshotService'
 import {
@@ -53,12 +56,42 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   }, [state])
 
   useEffect(() => {
+    const handleInvalidSession = (event: Event) => {
+      const eventUserId = (event as CustomEvent<{ userId: string | null }>).detail?.userId ?? null
+      const userId = eventUserId
+        ?? stateRef.current.activeThread?.userId
+        ?? stateRef.current.serverSnapshot?.userId
+        ?? null
+      clearIntegrationCache(userId)
+      clearIdempotencyStore(userId)
+      dispatch({
+        type: 'AUTH_SESSION_INVALIDATED',
+        error: {
+          code: 'AUTH_INVALID',
+          message: '当前 XUANOS 会话无效，请刷新页面重新建立安全会话。',
+          status: 401,
+          requestId: null,
+        },
+      })
+    }
+    window.addEventListener(AUTH_SESSION_INVALIDATED_EVENT, handleInvalidSession)
+    return () => window.removeEventListener(AUTH_SESSION_INVALIDATED_EVENT, handleInvalidSession)
+  }, [])
+
+  useEffect(() => {
     if (hydratedRef.current) return
     hydratedRef.current = true
 
     const hydrate = async () => {
       dispatch({ type: 'API_REQUEST_STARTED' })
       let firstError: unknown = null
+
+      try {
+        await ensureAuthSession()
+      } catch (error) {
+        dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(error) })
+        return
+      }
 
       const [threadsResult, snapshotResult] = await Promise.allSettled([
         listThreads(),

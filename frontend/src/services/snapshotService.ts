@@ -4,6 +4,6 @@ import { snapshotMapper } from '../mappers/snapshotMapper'
 import type { SystemSnapshot } from '../types'
 
 export async function getCurrentSnapshot(): Promise<SystemSnapshot> {
-  const dto = await apiData<SnapshotDto>('/api/users/demo-user/snapshot')
+  const dto = await apiData<SnapshotDto>('/api/users/me/snapshot')
   return snapshotMapper(dto)
 }

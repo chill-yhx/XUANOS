@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import CurrentUser
 from app.api.responses import success
 from app.db.session import get_db
 from app.schemas.common import Envelope
@@ -19,22 +20,29 @@ def create_thread(
     request: Request,
     idempotency_key: IdempotencyKey,
     session: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
 ) -> dict:
-    return success(request, ThreadService(session).create(payload, idempotency_key))
+    return success(request, ThreadService(session, current_user.id).create(payload, idempotency_key))
 
 
 @router.get("", response_model=Envelope[list[ThreadRead]])
 def list_threads(
     request: Request,
     session: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     thread_status: Annotated[str | None, Query(alias="status")] = None,
 ) -> dict:
-    threads = ThreadService(session).list(limit, thread_status)
+    threads = ThreadService(session, current_user.id).list(limit, thread_status)
     return success(request, [ThreadRead.model_validate(thread) for thread in threads])
 
 
 @router.get("/{thread_id}", response_model=Envelope[ThreadAggregate])
-def get_thread(thread_id: str, request: Request, session: Annotated[Session, Depends(get_db)]) -> dict:
-    aggregate = ThreadService(session).get_aggregate(thread_id)
+def get_thread(
+    thread_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> dict:
+    aggregate = ThreadService(session, current_user.id).get_aggregate(thread_id)
     return success(request, aggregate)

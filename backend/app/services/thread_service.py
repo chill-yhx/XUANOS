@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
-from app.db.seed import DEMO_USER_ID, ensure_demo_user
+from app.db.seed import ensure_user_snapshot
 from app.models.thread import Thread
 from app.repositories.snapshots import SnapshotRepository
 from app.repositories.threads import ThreadRepository
@@ -20,16 +20,18 @@ from app.schemas.understanding import (
 
 
 class ThreadService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
+        self.user_id = user_id
         self.threads = ThreadRepository(session)
         self.snapshots = SnapshotRepository(session)
         self.workflow = WorkflowRepository(session)
 
     def create(self, payload: ThreadCreate, idempotency_key: str) -> dict:
-        ensure_demo_user(self.session)
+        ensure_user_snapshot(self.session, self.user_id)
         manager = IdempotencyManager(
             self.session,
+            self.user_id,
             "POST /api/threads",
             idempotency_key,
             payload.model_dump(mode="json"),
@@ -37,7 +39,7 @@ class ThreadService:
         if replay := manager.replay():
             return replay
 
-        thread = self.threads.add(Thread(user_id=DEMO_USER_ID, title=payload.title.strip()))
+        thread = self.threads.add(Thread(user_id=self.user_id, title=payload.title.strip()))
         self.session.flush()
         data = ThreadRead.model_validate(thread).model_dump(mode="json")
         manager.store("thread", thread.id, data)
@@ -45,12 +47,12 @@ class ThreadService:
         return data
 
     def list(self, limit: int, thread_status: str | None = None) -> list[Thread]:
-        ensure_demo_user(self.session)
+        ensure_user_snapshot(self.session, self.user_id)
         self.session.commit()
-        return self.threads.list_for_user(DEMO_USER_ID, limit, thread_status)
+        return self.threads.list_for_user(self.user_id, limit, thread_status)
 
     def get_aggregate(self, thread_id: str) -> ThreadAggregate:
-        thread = self.threads.get_for_user(thread_id, DEMO_USER_ID)
+        thread = self.threads.get_for_user(thread_id, self.user_id)
         if thread is None:
             raise APIError(
                 status.HTTP_404_NOT_FOUND,
@@ -58,16 +60,16 @@ class ThreadService:
                 "任务线程不存在。",
                 {"thread_id": thread_id},
             )
-        snapshot = self.snapshots.get_current(DEMO_USER_ID)
+        snapshot = self.snapshots.get_current(self.user_id)
         if snapshot is None:
-            _, snapshot = ensure_demo_user(self.session)
+            _, snapshot = ensure_user_snapshot(self.session, self.user_id)
             self.session.commit()
         understanding = (
-            self.workflow.get_understanding(thread.active_understanding_session_id, DEMO_USER_ID)
+            self.workflow.get_understanding(thread.active_understanding_session_id, self.user_id)
             if thread.active_understanding_session_id
             else None
         )
-        current_plan = self.workflow.get_plan(thread.active_plan_id, DEMO_USER_ID) if thread.active_plan_id else None
+        current_plan = self.workflow.get_plan(thread.active_plan_id, self.user_id) if thread.active_plan_id else None
         plan_versions = self.workflow.plan_versions(thread.id)
         latest_action = self.workflow.latest_action_result(thread.id)
         return ThreadAggregate(

@@ -10,6 +10,6 @@ class DemoResetRequest(BaseModel):
 
 
 class DemoResetResult(BaseModel):
-    user_id: Literal["demo-user"]
+    user_id: str
     current_step: Literal["idle"]
     snapshot: SnapshotRead

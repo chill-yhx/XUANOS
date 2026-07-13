@@ -15,7 +15,7 @@ def test_demo_reset_removes_threads_and_recreates_snapshot(client: TestClient) -
 
     assert response.status_code == 200
     result = response.json()["data"]
-    assert result["user_id"] == "demo-user"
+    assert result["user_id"] == client.user_id  # type: ignore[attr-defined]
     assert result["current_step"] == "idle"
     assert result["snapshot"]["version"] == 1
     assert client.get("/api/threads").json()["data"] == []

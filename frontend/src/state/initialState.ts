@@ -18,7 +18,7 @@ export const initialFeedback: FeedbackPayload = {
 function createEmptySnapshot(): SystemSnapshot {
   return {
     id: null,
-    userId: 'demo-user',
+    userId: '',
     version: 0,
     sourceThreadId: null,
     sourceActionResultId: null,

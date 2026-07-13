@@ -2,21 +2,22 @@ from copy import deepcopy
 
 from sqlalchemy.orm import Session
 
-from app.db.seed import DEMO_USER_ID, ensure_demo_user
+from app.db.seed import ensure_user_snapshot
 from app.models.snapshot import UserSnapshot
 from app.models.user import User
 from app.repositories.snapshots import SnapshotRepository
 
 
 class SnapshotService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
+        self.user_id = user_id
         self.snapshots = SnapshotRepository(session)
 
     def get_current(self) -> UserSnapshot:
-        snapshot = self.snapshots.get_current(DEMO_USER_ID)
+        snapshot = self.snapshots.get_current(self.user_id)
         if snapshot is None:
-            _, snapshot = ensure_demo_user(self.session)
+            _, snapshot = ensure_user_snapshot(self.session, self.user_id)
             self.session.commit()
         return snapshot
 
@@ -35,9 +36,9 @@ class SnapshotService:
         user_correction: str | None = None,
         increment_revision: bool = False,
     ) -> UserSnapshot:
-        current = self.snapshots.get_current(DEMO_USER_ID)
+        current = self.snapshots.get_current(self.user_id)
         if current is None:
-            _, current = ensure_demo_user(self.session)
+            _, current = ensure_user_snapshot(self.session, self.user_id)
 
         revisions = deepcopy(current.recent_revisions)
         if recent_revision:
@@ -47,7 +48,7 @@ class SnapshotService:
             corrections = [user_correction, *corrections][:10]
 
         snapshot = UserSnapshot(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             version=current.version + 1,
             source_thread_id=source_thread_id,
             source_action_result_id=source_action_result_id,
@@ -67,9 +68,9 @@ class SnapshotService:
         )
         self.session.add(snapshot)
         self.session.flush()
-        user = self.session.get(User, DEMO_USER_ID)
+        user = self.session.get(User, self.user_id)
         if user is None:
-            raise RuntimeError("demo-user must exist before creating a snapshot")
+            raise RuntimeError("Authenticated user must exist before creating a snapshot")
         user.current_snapshot_id = snapshot.id
         self.session.flush()
         return snapshot

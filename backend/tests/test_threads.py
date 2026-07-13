@@ -18,7 +18,7 @@ def test_create_list_and_get_thread(client: TestClient) -> None:
 
     assert created.status_code == 201
     thread = created.json()["data"]
-    assert thread["user_id"] == "demo-user"
+    assert thread["user_id"] == client.user_id  # type: ignore[attr-defined]
     assert thread["title"] == "XUANOS 暑假开发"
     assert thread["current_step"] == "idle"
 
@@ -30,7 +30,7 @@ def test_create_list_and_get_thread(client: TestClient) -> None:
     assert detail.status_code == 200
     aggregate = detail.json()["data"]
     assert aggregate["thread"]["id"] == thread["id"]
-    assert aggregate["current_snapshot"]["user_id"] == "demo-user"
+    assert aggregate["current_snapshot"]["user_id"] == client.user_id  # type: ignore[attr-defined]
     assert aggregate["plan_versions"] == []
 
 

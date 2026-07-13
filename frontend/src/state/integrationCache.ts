@@ -1,9 +1,13 @@
 import { understandingQuestionAt } from '../data/understandingQuestions'
 import type { ActionObstacleCode, DemoSessionState, FeedbackPayload, InteractionStep } from '../types'
+import { readAuthSession } from '../api/authSession'
 import { createInitialSession } from './initialState'
 
-const STORAGE_KEY = 'xuanos:demo-user:integration-cache:v2'
-const LEGACY_STORAGE_KEY = 'xuanos:demo-user:session:v1'
+const STORAGE_PREFIX = 'xuanos:integration-cache:v3'
+
+function storageKey(userId: string) {
+  return `${STORAGE_PREFIX}:${userId}`
+}
 
 const validSteps = new Set<InteractionStep>([
   'idle',
@@ -21,7 +25,8 @@ const validSteps = new Set<InteractionStep>([
 ])
 
 interface IntegrationCache {
-  schemaVersion: 2
+  schemaVersion: 3
+  userId: string
   savedAt: string
   lastThreadId: string | null
   server: Pick<
@@ -140,7 +145,7 @@ function isStep(value: unknown): value is InteractionStep {
   return typeof value === 'string' && validSteps.has(value as InteractionStep)
 }
 
-function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>): DemoSessionState {
+function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>): DemoSessionState {
   const server = parsed.server
   const cachedUnderstanding = parsed.understanding
   const drafts = parsed.drafts
@@ -260,41 +265,31 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   }
 }
 
-function restoreLegacy(fallback: DemoSessionState): DemoSessionState {
+export function restoreIntegrationState(): DemoSessionState {
+  const fallback = createInitialSession()
+  const authSession = readAuthSession()
+  if (!authSession) return fallback
   try {
-    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    const raw = window.localStorage.getItem(storageKey(authSession.userId))
     if (!raw) return fallback
-    const legacy = JSON.parse(raw) as Partial<DemoSessionState>
-    return {
-      ...fallback,
-      expressionMode: legacy.expressionMode ?? null,
-      userInput: legacy.userInput ?? '',
-      currentAnswerDraft: legacy.currentAnswerDraft ?? '',
-      understandingCorrectionDraft: legacy.understandingCorrectionDraft ?? '',
-      correctionDraft: legacy.correctionDraft ?? '',
-      correctionReason: legacy.correctionReason ?? '',
-    }
+    const parsed = JSON.parse(raw) as Partial<IntegrationCache>
+    if (parsed.schemaVersion !== 3 || parsed.userId !== authSession.userId) return fallback
+    return restoreV3(fallback, parsed)
   } catch {
     return fallback
   }
 }
 
-export function restoreIntegrationState(): DemoSessionState {
-  const fallback = createInitialSession()
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return restoreLegacy(fallback)
-    const parsed = JSON.parse(raw) as Partial<IntegrationCache>
-    if (parsed.schemaVersion !== 2) return restoreLegacy(fallback)
-    return restoreV2(fallback, parsed)
-  } catch {
-    return restoreLegacy(fallback)
-  }
-}
-
 export function writeIntegrationCache(state: DemoSessionState) {
+  const authSession = readAuthSession()
+  if (!authSession) return
+  if (
+    state.activeThread?.userId && state.activeThread.userId !== authSession.userId
+    || state.serverSnapshot?.userId && state.serverSnapshot.userId !== authSession.userId
+  ) return
   const cache: IntegrationCache = {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    userId: authSession.userId,
     savedAt: new Date().toISOString(),
     lastThreadId: state.activeThreadId,
     server: {
@@ -366,17 +361,15 @@ export function writeIntegrationCache(state: DemoSessionState) {
     },
   }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cache))
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+    window.localStorage.setItem(storageKey(authSession.userId), JSON.stringify(cache))
   } catch {
     // The current in-memory state remains usable without browser storage.
   }
 }
 
-export function clearIntegrationCache() {
+export function clearIntegrationCache(userId = readAuthSession()?.userId ?? null) {
   try {
-    window.localStorage.removeItem(STORAGE_KEY)
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+    if (userId) window.localStorage.removeItem(storageKey(userId))
   } catch {
     // The reducer still resets the in-memory demo state.
   }

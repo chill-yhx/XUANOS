@@ -9,14 +9,10 @@ from app.api.router import api_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
-from app.db.seed import ensure_demo_user
-from app.db.session import SessionLocal
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    with SessionLocal.begin() as session:
-        ensure_demo_user(session)
     yield
 
 

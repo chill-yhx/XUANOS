@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
-from app.db.seed import DEMO_USER_ID
 from app.models.goal import Goal
 from app.models.plan import Plan, PlanItem
 from app.models.understanding import UserCorrection
@@ -27,16 +26,19 @@ from app.services.snapshot_service import SnapshotService
 
 
 class PlanService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
+        self.user_id = user_id
         self.workflow = WorkflowRepository(session)
 
     def create(self, payload: PlanCreateRequest, idempotency_key: str) -> dict:
-        manager = IdempotencyManager(self.session, "POST /api/plans", idempotency_key, payload.model_dump(mode="json"))
+        manager = IdempotencyManager(
+            self.session, self.user_id, "POST /api/plans", idempotency_key, payload.model_dump(mode="json")
+        )
         if replay := manager.replay():
             return replay
         thread = self._thread(payload.thread_id)
-        understanding = self.workflow.get_understanding(payload.understanding_session_id, DEMO_USER_ID)
+        understanding = self.workflow.get_understanding(payload.understanding_session_id, self.user_id)
         if understanding is None or understanding.thread_id != thread.id:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "理解会话不存在。")
         if understanding.status != "confirmed" or thread.current_step != "understanding_confirmed":
@@ -56,7 +58,7 @@ class PlanService:
             id=plan_id,
             root_plan_id=plan_id,
             thread_id=thread.id,
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             understanding_session_id=understanding.id,
             primary_goal_id=goal.id,
             version=1,
@@ -79,7 +81,7 @@ class PlanService:
         thread.current_step = "plan_generated"
         thread.phase = "计划裁决"
         thread.last_activity_at = datetime.now(UTC)
-        SnapshotService(self.session).create_version(
+        SnapshotService(self.session, self.user_id).create_version(
             source_thread_id=thread.id,
             current_stage="计划待确认",
             recent_revision="计划 v1 已生成，等待用户确认。",
@@ -95,6 +97,7 @@ class PlanService:
     def revise(self, plan_id: str, payload: PlanReviseRequest, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
             self.session,
+            self.user_id,
             f"POST /api/plans/{plan_id}/revise",
             idempotency_key,
             payload.model_dump(mode="json"),
@@ -162,7 +165,7 @@ class PlanService:
             )
         previous.status = "superseded"
         correction = UserCorrection(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             thread_id=thread.id,
             target_type="plan",
             target_id=previous.id,
@@ -178,7 +181,7 @@ class PlanService:
         thread.current_step = "plan_modified"
         thread.phase = "等待接受"
         thread.last_activity_at = datetime.now(UTC)
-        SnapshotService(self.session).create_version(
+        SnapshotService(self.session, self.user_id).create_version(
             source_thread_id=thread.id,
             current_stage="计划待确认",
             recent_revision=f"用户修改计划，生成 v{current.version}。",
@@ -199,6 +202,7 @@ class PlanService:
     def accept(self, plan_id: str, payload: PlanAcceptRequest, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
             self.session,
+            self.user_id,
             f"POST /api/plans/{plan_id}/accept",
             idempotency_key,
             payload.model_dump(mode="json"),
@@ -213,7 +217,7 @@ class PlanService:
             raise APIError(status.HTTP_409_CONFLICT, "INVALID_FLOW_STATE", "当前计划状态不允许接受。")
 
         if plan.status == "accepted":
-            snapshot = SnapshotService(self.session).get_current()
+            snapshot = SnapshotService(self.session, self.user_id).get_current()
             result = PlanAcceptResult(
                 plan=self._plan_read(plan),
                 snapshot=SnapshotRead.model_validate(snapshot),
@@ -230,7 +234,7 @@ class PlanService:
         thread.current_step = "plan_accepted"
         thread.phase = plan.stage
         thread.last_activity_at = datetime.now(UTC)
-        snapshot = SnapshotService(self.session).create_version(
+        snapshot = SnapshotService(self.session, self.user_id).create_version(
             source_thread_id=thread.id,
             current_vector=self._goal_outcome(plan),
             current_stage=plan.stage,
@@ -250,13 +254,13 @@ class PlanService:
         return data
 
     def _thread(self, thread_id: str):
-        thread = self.workflow.get_thread(thread_id, DEMO_USER_ID)
+        thread = self.workflow.get_thread(thread_id, self.user_id)
         if thread is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "任务线程不存在。")
         return thread
 
     def _plan(self, plan_id: str) -> Plan:
-        plan = self.workflow.get_plan(plan_id, DEMO_USER_ID)
+        plan = self.workflow.get_plan(plan_id, self.user_id)
         if plan is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "计划不存在。")
         return plan

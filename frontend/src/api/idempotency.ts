@@ -1,4 +1,6 @@
-const STORAGE_KEY = 'xuanos:demo-user:idempotency:v1'
+import { readAuthSession } from './authSession'
+
+const STORAGE_PREFIX = 'xuanos:idempotency:v2'
 
 interface PendingIdempotency {
   key: string
@@ -8,9 +10,15 @@ interface PendingIdempotency {
 
 type PendingStore = Record<string, PendingIdempotency>
 
+function storageKey(userId = readAuthSession()?.userId): string | null {
+  return userId ? `${STORAGE_PREFIX}:${userId}` : null
+}
+
 function readStore(): PendingStore {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const key = storageKey()
+    if (!key) return {}
+    const raw = window.localStorage.getItem(key)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     return parsed && typeof parsed === 'object' ? parsed as PendingStore : {}
@@ -21,7 +29,9 @@ function readStore(): PendingStore {
 
 function writeStore(store: PendingStore) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+    const key = storageKey()
+    if (!key) return
+    window.localStorage.setItem(key, JSON.stringify(store))
   } catch {
     // In-memory request deduplication still protects the current interaction.
   }
@@ -49,4 +59,13 @@ export function clearIdempotencyKey(operation: string, key: string) {
   if (store[operation]?.key !== key) return
   delete store[operation]
   writeStore(store)
+}
+
+export function clearIdempotencyStore(userId: string | null) {
+  if (!userId) return
+  try {
+    window.localStorage.removeItem(storageKey(userId)!)
+  } catch {
+    // An invalid session is still removed even if browser storage is unavailable.
+  }
 }

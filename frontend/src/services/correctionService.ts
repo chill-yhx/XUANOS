@@ -19,7 +19,7 @@ export async function submitUserCorrection(
   const idempotencyKey = getOrCreateIdempotencyKey(operation, payload)
 
   try {
-    const dto = await apiData<UserCorrectionResultDto>('/api/users/demo-user/corrections', {
+    const dto = await apiData<UserCorrectionResultDto>('/api/users/me/corrections', {
       method: 'POST',
       body: payload,
       idempotencyKey,

@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/xuanos_dev.db"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     log_level: str = "INFO"
-    demo_reset_enabled: bool = True
+    demo_reset_enabled: bool = False
+    session_ttl_days: int = 30
 
     @field_validator("cors_origins", mode="before")
     @classmethod

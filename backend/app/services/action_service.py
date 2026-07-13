@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
-from app.db.seed import DEMO_USER_ID
 from app.models.action_result import ActionResult
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import UserCorrection
@@ -23,20 +22,25 @@ from app.services.snapshot_service import SnapshotService
 
 
 class ActionService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
+        self.user_id = user_id
         self.workflow = WorkflowRepository(session)
 
     def submit(self, payload: ActionResultCreate, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
-            self.session, "POST /api/action-results", idempotency_key, payload.model_dump(mode="json")
+            self.session,
+            self.user_id,
+            "POST /api/action-results",
+            idempotency_key,
+            payload.model_dump(mode="json"),
         )
         if replay := manager.replay():
             return replay
-        thread = self.workflow.get_thread(payload.thread_id, DEMO_USER_ID)
+        thread = self.workflow.get_thread(payload.thread_id, self.user_id)
         if thread is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "任务线程不存在。")
-        plan = self.workflow.get_plan(payload.plan_id, DEMO_USER_ID)
+        plan = self.workflow.get_plan(payload.plan_id, self.user_id)
         if plan is None or plan.thread_id != thread.id:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "计划不存在。")
         if plan.status != "accepted" or thread.active_plan_id != plan.id:
@@ -55,7 +59,7 @@ class ActionService:
             obstacle_code=payload.obstacle_code,
         )
         action = ActionResult(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             thread_id=thread.id,
             plan_id=plan.id,
             idempotency_key=idempotency_key,
@@ -79,7 +83,7 @@ class ActionService:
         hypothesis = self.workflow.hypothesis(thread.id, "execution_avoidance")
         if hypothesis is None:
             hypothesis = Hypothesis(
-                user_id=DEMO_USER_ID,
+                user_id=self.user_id,
                 thread_id=thread.id,
                 content="用户可能通过继续完善文档推迟真实开发",
                 category="execution_avoidance",
@@ -104,7 +108,7 @@ class ActionService:
             correction_text = payload.unrealistic_part.strip()
             self.session.add(
                 UserCorrection(
-                    user_id=DEMO_USER_ID,
+                    user_id=self.user_id,
                     thread_id=thread.id,
                     target_type="plan",
                     target_id=plan.id,
@@ -116,7 +120,7 @@ class ActionService:
                 )
             )
 
-        current_snapshot = SnapshotService(self.session).get_current()
+        current_snapshot = SnapshotService(self.session, self.user_id).get_current()
         patterns = list(current_snapshot.effective_patterns)
         if not any(item.get("content") == decision.pattern for item in patterns):
             patterns.append({"content": decision.pattern, "maturity": "candidate"})
@@ -125,7 +129,7 @@ class ActionService:
             for item in self.workflow.hypotheses(thread.id)
             if item.user_attitude != "rejected" and item.status not in {"denied", "expired"}
         ]
-        snapshot = SnapshotService(self.session).create_version(
+        snapshot = SnapshotService(self.session, self.user_id).create_version(
             source_thread_id=thread.id,
             source_action_result_id=action.id,
             current_stage=decision.next_stage,

@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
-from app.db.seed import DEMO_USER_ID
 from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.plan import Plan
@@ -30,15 +29,17 @@ TARGET_MODELS = {
 
 
 class CorrectionService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
-        self.snapshots = SnapshotService(session)
+        self.user_id = user_id
+        self.snapshots = SnapshotService(session, user_id)
 
     def create(self, payload: UserCorrectionCreate, idempotency_key: str) -> dict:
         current_snapshot = self.snapshots.get_current()
         manager = IdempotencyManager(
             self.session,
-            "POST /api/users/demo-user/corrections",
+            self.user_id,
+            "POST /api/users/me/corrections",
             idempotency_key,
             payload.model_dump(mode="json"),
         )
@@ -48,7 +49,7 @@ class CorrectionService:
         target, thread_id = self._resolve_target(payload, current_snapshot)
         decision = decide_correction(payload.correction_type, payload.target_type)
         correction = UserCorrection(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             thread_id=thread_id,
             target_type=payload.target_type,
             target_id=payload.target_id,
@@ -113,7 +114,7 @@ class CorrectionService:
 
         model = TARGET_MODELS[payload.target_type]
         target = self.session.get(model, payload.target_id)
-        if target is None or getattr(target, "user_id", None) != DEMO_USER_ID:
+        if target is None or getattr(target, "user_id", None) != self.user_id:
             raise APIError(
                 status.HTTP_404_NOT_FOUND,
                 "RESOURCE_NOT_FOUND",

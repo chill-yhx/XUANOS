@@ -80,13 +80,13 @@ def test_supported_correction_types(
     correction_type: str,
     snapshot_updated: bool,
 ) -> None:
-    before = client.get("/api/users/demo-user/snapshot").json()["data"]
+    before = client.get("/api/users/me/snapshot").json()["data"]
     payload = correction_payload(correction_type)
     if correction_type == "accurate":
         payload["corrected_value"] = payload["original_value"]
 
     response = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency(f"correction-type-{correction_type}"),
         json=payload,
     )
@@ -104,12 +104,12 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
     first_headers = idempotency("correction-vector-changed")
 
     first = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=first_headers,
         json=first_payload,
     )
     replay = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=first_headers,
         json=first_payload,
     )
@@ -126,7 +126,7 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
         corrected_value="先完成后端契约，再开始前端联调",
     )
     second = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency("correction-vector-partial"),
         json=second_payload,
     )
@@ -138,7 +138,7 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
     assert second_result["snapshot"]["current_vector"] == "先完成后端契约，再开始前端联调"
     assert second_result["snapshot"]["user_corrections"][0].endswith("先完成后端契约，再开始前端联调")
 
-    latest = client.get("/api/users/demo-user/snapshot")
+    latest = client.get("/api/users/me/snapshot")
     assert latest.status_code == 200
     assert latest.json()["data"]["id"] == second_result["snapshot"]["id"]
 
@@ -153,10 +153,10 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
 def test_correction_idempotency_key_rejects_different_payload(client: TestClient) -> None:
     headers = idempotency("correction-conflicting-payload")
     payload = correction_payload("changed")
-    assert client.post("/api/users/demo-user/corrections", headers=headers, json=payload).status_code == 201
+    assert client.post("/api/users/me/corrections", headers=headers, json=payload).status_code == 201
 
     conflict = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=headers,
         json={**payload, "corrected_value": "另一项修正"},
     )
@@ -167,7 +167,7 @@ def test_correction_idempotency_key_rejects_different_payload(client: TestClient
 
 def test_correction_rejects_unknown_target(client: TestClient) -> None:
     response = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency("correction-missing-target"),
         json={
             "target_type": "plan",
@@ -187,7 +187,7 @@ def test_discontinued_hypothesis_is_removed_from_snapshot(client: TestClient) ->
     hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis")
 
     correction = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-discontinue"),
         json={
             "target_type": "hypothesis",
@@ -216,7 +216,7 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
     corrected_content = "用户在明确首个交付物后更容易进入真实开发。"
 
     partial = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-replacement-partial"),
         json={
             "target_type": "hypothesis",
@@ -242,7 +242,7 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
         assert replacement.user_attitude == "accepted"
 
     discontinued = client.post(
-        "/api/users/demo-user/corrections",
+        "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-replacement-discontinue"),
         json={
             "target_type": "hypothesis",
@@ -267,7 +267,7 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
 def test_openapi_exposes_thread_and_correction_idempotency(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     thread_post = schema["paths"]["/api/threads"]["post"]
-    correction_post = schema["paths"]["/api/users/demo-user/corrections"]["post"]
+    correction_post = schema["paths"]["/api/users/me/corrections"]["post"]
 
     assert any(
         parameter["name"] == "Idempotency-Key" and parameter["required"] for parameter in thread_post["parameters"]

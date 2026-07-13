@@ -1,4 +1,5 @@
 import { ApiError, apiErrorFromResponse } from './apiErrors'
+import { invalidateAuthSession, readAuthSession } from './authSession'
 import type { ApiEnvelope } from './dto'
 
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000'
@@ -11,6 +12,7 @@ interface ApiRequestOptions {
   timeoutMs?: number
   idempotencyKey?: string
   headers?: Record<string, string>
+  requiresAuth?: boolean
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
@@ -29,6 +31,14 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     }
     if (options.body !== undefined) headers['Content-Type'] = 'application/json'
     if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
+    if (options.requiresAuth !== false) {
+      const authSession = readAuthSession()
+      if (!authSession) {
+        invalidateAuthSession()
+        throw new ApiError('需要有效的 XUANOS 会话。', { code: 'AUTH_REQUIRED', status: 401 })
+      }
+      headers.Authorization = `Bearer ${authSession.accessToken}`
+    }
 
     const response = await fetch(`${API_BASE_URL}${path}`, {
       method: options.method ?? 'GET',
@@ -48,7 +58,10 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
         })
       }
     }
-    if (!response.ok) throw apiErrorFromResponse(response.status, payload)
+    if (!response.ok) {
+      if (response.status === 401) invalidateAuthSession()
+      throw apiErrorFromResponse(response.status, payload)
+    }
     return payload as T
   } catch (error) {
     if (error instanceof ApiError) throw error

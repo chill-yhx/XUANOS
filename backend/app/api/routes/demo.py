@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import CurrentUser
 from app.api.responses import success
 from app.core.config import Settings, get_settings
 from app.core.errors import APIError
@@ -21,9 +22,14 @@ def reset_demo(
     request: Request,
     session: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: CurrentUser,
 ) -> dict:
-    if not settings.demo_reset_enabled:
+    if settings.app_env != "development" or not settings.demo_reset_enabled:
         raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "资源不存在。")
-    snapshot = DemoService(session).reset()
-    result = DemoResetResult(user_id="demo-user", current_step="idle", snapshot=SnapshotRead.model_validate(snapshot))
+    snapshot = DemoService(session, current_user.id).reset()
+    result = DemoResetResult(
+        user_id=current_user.id,
+        current_step="idle",
+        snapshot=SnapshotRead.model_validate(snapshot),
+    )
     return success(request, result)

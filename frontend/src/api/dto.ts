@@ -6,6 +6,13 @@ export interface ApiEnvelope<T> {
   }
 }
 
+export interface AuthSessionDto {
+  access_token: string
+  token_type: 'bearer'
+  user_id: string
+  expires_at: string
+}
+
 export interface ThreadDto {
   id: string
   user_id: string

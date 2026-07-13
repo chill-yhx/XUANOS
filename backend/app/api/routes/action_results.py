@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import CurrentUser
 from app.api.responses import success
 from app.db.session import get_db
 from app.schemas.action_result import ActionResultCreate, ActionSubmissionResult
@@ -19,5 +20,6 @@ def submit_action_result(
     request: Request,
     idempotency_key: IdempotencyKey,
     session: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
 ) -> dict:
-    return success(request, ActionService(session).submit(payload, idempotency_key))
+    return success(request, ActionService(session, current_user.id).submit(payload, idempotency_key))

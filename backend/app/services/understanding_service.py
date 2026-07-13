@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
-from app.db.seed import DEMO_USER_ID
 from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
@@ -29,13 +28,18 @@ from app.services.snapshot_service import SnapshotService
 
 
 class UnderstandingService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: str) -> None:
         self.session = session
+        self.user_id = user_id
         self.workflow = WorkflowRepository(session)
 
     def analyze(self, payload: UnderstandingAnalyzeRequest, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
-            self.session, "POST /api/understanding/analyze", idempotency_key, payload.model_dump(mode="json")
+            self.session,
+            self.user_id,
+            "POST /api/understanding/analyze",
+            idempotency_key,
+            payload.model_dump(mode="json"),
         )
         if replay := manager.replay():
             return replay
@@ -80,6 +84,7 @@ class UnderstandingService:
     def confirm(self, session_id: str, payload: UnderstandingConfirmRequest, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
             self.session,
+            self.user_id,
             f"POST /api/understanding/{session_id}/confirm",
             idempotency_key,
             payload.model_dump(mode="json"),
@@ -112,7 +117,7 @@ class UnderstandingService:
                 if hypothesis.user_attitude == "rejected" or hypothesis.status in {"denied", "expired"}
                 else [self._hypothesis_frontend(hypothesis)]
             )
-            snapshot = SnapshotService(self.session).create_version(
+            snapshot = SnapshotService(self.session, self.user_id).create_version(
                 source_thread_id=thread.id,
                 current_vector=goal.desired_outcome,
                 reality_boundaries=[understanding.constraints_summary or "现实限制仍待补充"],
@@ -128,7 +133,7 @@ class UnderstandingService:
                 )
             previous = understanding.uncertain or ""
             correction = UserCorrection(
-                user_id=DEMO_USER_ID,
+                user_id=self.user_id,
                 thread_id=thread.id,
                 target_type="understanding",
                 target_id=understanding.id,
@@ -141,7 +146,7 @@ class UnderstandingService:
             self.session.add(correction)
             understanding.uncertain = f"用户补充：{payload.correction.strip()}"
             understanding.summary_version += 1
-            snapshot = SnapshotService(self.session).create_version(
+            snapshot = SnapshotService(self.session, self.user_id).create_version(
                 source_thread_id=thread.id,
                 user_correction=payload.correction.strip(),
                 recent_revision="用户纠正了理解摘要。",
@@ -162,13 +167,13 @@ class UnderstandingService:
         return data
 
     def _thread(self, thread_id: str):
-        thread = self.workflow.get_thread(thread_id, DEMO_USER_ID)
+        thread = self.workflow.get_thread(thread_id, self.user_id)
         if thread is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "任务线程不存在。")
         return thread
 
     def _understanding(self, session_id: str) -> UnderstandingSession:
-        understanding = self.workflow.get_understanding(session_id, DEMO_USER_ID)
+        understanding = self.workflow.get_understanding(session_id, self.user_id)
         if understanding is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "理解会话不存在。")
         return understanding
@@ -187,7 +192,7 @@ class UnderstandingService:
         understanding = UnderstandingSession(
             id=new_id(),
             thread_id=thread_id,
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             previous_session_id=thread.active_understanding_session_id,
             expression_mode=payload.expression_mode,
             status="collecting",
@@ -279,7 +284,7 @@ class UnderstandingService:
         if goal:
             return goal
         goal = Goal(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             thread_id=understanding.thread_id,
             understanding_session_id=understanding.id,
             original_expression=understanding.user_input or understanding.real_goal or "",
@@ -307,7 +312,7 @@ class UnderstandingService:
             return
         self.session.add(
             Constraint(
-                user_id=DEMO_USER_ID,
+                user_id=self.user_id,
                 thread_id=understanding.thread_id,
                 goal_id=goal.id,
                 content=understanding.constraints_summary or "现实限制仍待确认",
@@ -325,7 +330,7 @@ class UnderstandingService:
         if hypothesis:
             return hypothesis
         hypothesis = Hypothesis(
-            user_id=DEMO_USER_ID,
+            user_id=self.user_id,
             thread_id=thread_id,
             content="用户可能通过继续完善文档推迟真实开发",
             category="execution_avoidance",

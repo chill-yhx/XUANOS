@@ -11,7 +11,7 @@ def test_thread_survives_new_application_client(client: TestClient) -> None:
     )
     thread_id = created.json()["data"]["id"]
 
-    with TestClient(app) as restarted_client:
+    with TestClient(app, headers={"Authorization": client.headers["Authorization"]}) as restarted_client:
         response = restarted_client.get(f"/api/threads/{thread_id}")
 
     assert response.status_code == 200
