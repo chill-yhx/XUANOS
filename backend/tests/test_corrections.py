@@ -1,9 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
+from app.main import app
 from app.models.hypothesis import Hypothesis
+from app.models.idempotency import IdempotencyRecord
 from app.models.snapshot import UserSnapshot
 from app.models.understanding import UserCorrection
 
@@ -14,11 +19,13 @@ def idempotency(value: str) -> dict[str, str]:
 
 def correction_payload(
     correction_type: str,
+    expected_snapshot_id: str,
     *,
     original_value: str = "完成 XUANOS 静态前端原型",
     corrected_value: str = "完成 XUANOS 前后端联调",
 ) -> dict[str, str]:
     return {
+        "expected_snapshot_id": expected_snapshot_id,
         "target_type": "system_section",
         "target_id": "vector",
         "correction_type": correction_type,
@@ -62,7 +69,28 @@ def create_confirmed_hypothesis(client: TestClient, key_prefix: str) -> dict:
         json={"assessment": "accurate"},
     )
     assert confirmed.status_code == 200
-    return confirmed.json()["data"]["snapshot"]["hypotheses"][0]
+    hypothesis = confirmed.json()["data"]["snapshot"]["hypotheses"][0]
+    return {**hypothesis, "_thread_id": thread["id"], "_session_id": session_id}
+
+
+def create_and_accept_plan(client: TestClient, hypothesis_data: dict, key_prefix: str) -> dict:
+    created = client.post(
+        "/api/plans",
+        headers=idempotency(f"{key_prefix}-plan"),
+        json={
+            "thread_id": hypothesis_data["_thread_id"],
+            "understanding_session_id": hypothesis_data["_session_id"],
+        },
+    )
+    assert created.status_code == 201
+    plan = created.json()["data"]["plan"]
+    accepted = client.post(
+        f"/api/plans/{plan['id']}/accept",
+        headers=idempotency(f"{key_prefix}-accept"),
+        json={"expected_version": plan["version"]},
+    )
+    assert accepted.status_code == 200
+    return accepted.json()["data"]["plan"]
 
 
 @pytest.mark.parametrize(
@@ -81,7 +109,7 @@ def test_supported_correction_types(
     snapshot_updated: bool,
 ) -> None:
     before = client.get("/api/users/me/snapshot").json()["data"]
-    payload = correction_payload(correction_type)
+    payload = correction_payload(correction_type, before["id"])
     if correction_type == "accurate":
         payload["corrected_value"] = payload["original_value"]
 
@@ -100,7 +128,8 @@ def test_supported_correction_types(
 
 
 def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
-    first_payload = correction_payload("changed")
+    initial_snapshot = client.get("/api/users/me/snapshot").json()["data"]
+    first_payload = correction_payload("changed", initial_snapshot["id"])
     first_headers = idempotency("correction-vector-changed")
 
     first = client.post(
@@ -122,6 +151,7 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
 
     second_payload = correction_payload(
         "partial",
+        first_result["snapshot"]["id"],
         original_value="完成 XUANOS 前后端联调",
         corrected_value="先完成后端契约，再开始前端联调",
     )
@@ -152,7 +182,8 @@ def test_correction_is_append_only_and_idempotent(client: TestClient) -> None:
 
 def test_correction_idempotency_key_rejects_different_payload(client: TestClient) -> None:
     headers = idempotency("correction-conflicting-payload")
-    payload = correction_payload("changed")
+    current_snapshot = client.get("/api/users/me/snapshot").json()["data"]
+    payload = correction_payload("changed", current_snapshot["id"])
     assert client.post("/api/users/me/corrections", headers=headers, json=payload).status_code == 201
 
     conflict = client.post(
@@ -165,11 +196,62 @@ def test_correction_idempotency_key_rejects_different_payload(client: TestClient
     assert conflict.json()["error"]["code"] == "DUPLICATE_SUBMISSION"
 
 
+def test_stale_snapshot_correction_is_rejected_without_partial_writes(client: TestClient) -> None:
+    snapshot_v1 = client.get("/api/users/me/snapshot").json()["data"]
+    first_payload = correction_payload("changed", snapshot_v1["id"])
+    second_payload = {
+        **correction_payload("partial", snapshot_v1["id"]),
+        "corrected_value": "基于过期快照的第二次修正",
+    }
+
+    barrier = Barrier(2)
+
+    def submit(payload: dict[str, str], key: str):
+        with TestClient(app) as concurrent_client:
+            barrier.wait(timeout=5)
+            return concurrent_client.post(
+                "/api/users/me/corrections",
+                headers={
+                    "Authorization": client.headers["Authorization"],
+                    "Idempotency-Key": key,
+                },
+                json=payload,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(
+            executor.map(
+                lambda args: submit(*args),
+                [
+                    (first_payload, "correction-concurrency-first"),
+                    (second_payload, "correction-concurrency-second"),
+                ],
+            )
+        )
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    succeeded = next(response for response in responses if response.status_code == 201)
+    stale = next(response for response in responses if response.status_code == 409)
+    snapshot_v2 = succeeded.json()["data"]["snapshot"]
+    assert snapshot_v2["version"] == snapshot_v1["version"] + 1
+    error = stale.json()["error"]
+    assert error["code"] == "STALE_SNAPSHOT"
+    assert error["details"]["expected_snapshot_id"] == snapshot_v1["id"]
+    assert error["details"]["current_snapshot_id"] == snapshot_v2["id"]
+
+    with SessionLocal() as session:
+        assert session.scalar(select(func.count(UserCorrection.id))) == 1
+        assert session.scalar(select(func.count(UserSnapshot.id))) == 2
+        assert session.scalar(select(func.count(IdempotencyRecord.id))) == 1
+
+
 def test_correction_rejects_unknown_target(client: TestClient) -> None:
+    current_snapshot = client.get("/api/users/me/snapshot").json()["data"]
     response = client.post(
         "/api/users/me/corrections",
         headers=idempotency("correction-missing-target"),
         json={
+            "expected_snapshot_id": current_snapshot["id"],
             "target_type": "plan",
             "target_id": "missing-plan",
             "correction_type": "inaccurate",
@@ -185,11 +267,14 @@ def test_correction_rejects_unknown_target(client: TestClient) -> None:
 
 def test_discontinued_hypothesis_is_removed_from_snapshot(client: TestClient) -> None:
     hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis")
+    plan = create_and_accept_plan(client, hypothesis_data, "correction-hypothesis")
+    current_snapshot = client.get("/api/users/me/snapshot").json()["data"]
 
     correction = client.post(
         "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-discontinue"),
         json={
+            "expected_snapshot_id": current_snapshot["id"],
             "target_type": "hypothesis",
             "target_id": hypothesis_data["id"],
             "correction_type": "discontinue",
@@ -206,19 +291,47 @@ def test_discontinued_hypothesis_is_removed_from_snapshot(client: TestClient) ->
         hypothesis = session.get(Hypothesis, hypothesis_data["id"])
         assert hypothesis is not None
         assert hypothesis.user_attitude == "rejected"
-        assert hypothesis.status == "denied"
+        assert hypothesis.status == "discontinued"
+        semantic_key = hypothesis.semantic_key
+
+    feedback = client.post(
+        "/api/action-results",
+        headers=idempotency("correction-hypothesis-feedback-after-discontinue"),
+        json={
+            "thread_id": hypothesis_data["_thread_id"],
+            "plan_id": plan["id"],
+            "started": False,
+            "completed": False,
+            "progress_percent": 0,
+            "obstacle_code": "other",
+        },
+    )
+
+    assert feedback.status_code == 201
+    feedback_data = feedback.json()["data"]
+    assert feedback_data["hypothesis"]["id"] == hypothesis_data["id"]
+    assert feedback_data["hypothesis"]["status"] == "discontinued"
+    assert all(item.get("id") != hypothesis_data["id"] for item in feedback_data["snapshot"]["hypotheses"])
+    with SessionLocal() as session:
+        hypothesis = session.get(Hypothesis, hypothesis_data["id"])
+        assert hypothesis is not None
+        assert hypothesis.status == "discontinued"
+        assert session.scalar(select(func.count(Hypothesis.id)).where(Hypothesis.semantic_key == semantic_key)) == 1
 
 
 def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinued(
     client: TestClient,
 ) -> None:
     hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis-replacement")
+    plan = create_and_accept_plan(client, hypothesis_data, "correction-hypothesis-replacement")
+    current_snapshot = client.get("/api/users/me/snapshot").json()["data"]
     corrected_content = "用户在明确首个交付物后更容易进入真实开发。"
 
     partial = client.post(
         "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-replacement-partial"),
         json={
+            "expected_snapshot_id": current_snapshot["id"],
             "target_type": "hypothesis",
             "target_id": hypothesis_data["id"],
             "correction_type": "partial",
@@ -237,14 +350,45 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
         original = session.get(Hypothesis, hypothesis_data["id"])
         replacement = session.get(Hypothesis, replacement_data["id"])
         assert original is not None
-        assert original.status == "expired"
+        assert original.status == "superseded"
+        assert original.superseded_by_id == replacement_data["id"]
         assert replacement is not None
         assert replacement.user_attitude == "accepted"
+
+    feedback = client.post(
+        "/api/action-results",
+        headers=idempotency("correction-hypothesis-replacement-feedback"),
+        json={
+            "thread_id": hypothesis_data["_thread_id"],
+            "plan_id": plan["id"],
+            "started": True,
+            "completed": False,
+            "progress_percent": 70,
+            "obstacle_code": "lack_of_time",
+        },
+    )
+    assert feedback.status_code == 201
+    feedback_data = feedback.json()["data"]
+    assert feedback_data["hypothesis"]["id"] == replacement_data["id"]
+    with SessionLocal() as session:
+        original = session.get(Hypothesis, hypothesis_data["id"])
+        assert original is not None
+        assert original.status == "superseded"
+        assert (
+            session.scalar(
+                select(func.count(Hypothesis.id)).where(
+                    Hypothesis.thread_id == hypothesis_data["_thread_id"],
+                    Hypothesis.category == "execution_avoidance",
+                )
+            )
+            == 2
+        )
 
     discontinued = client.post(
         "/api/users/me/corrections",
         headers=idempotency("correction-hypothesis-replacement-discontinue"),
         json={
+            "expected_snapshot_id": feedback_data["snapshot"]["id"],
             "target_type": "hypothesis",
             "target_id": replacement_data["id"],
             "correction_type": "discontinue",
@@ -261,7 +405,41 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
         replacement = session.get(Hypothesis, replacement_data["id"])
         assert replacement is not None
         assert replacement.user_attitude == "rejected"
-        assert replacement.status == "denied"
+        assert replacement.status == "discontinued"
+
+
+def test_inaccurate_hypothesis_creates_a_distinct_active_replacement(client: TestClient) -> None:
+    hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis-inaccurate")
+    current_snapshot = client.get("/api/users/me/snapshot").json()["data"]
+    corrected_content = "用户会在目标边界不清晰时推迟开始"
+
+    response = client.post(
+        "/api/users/me/corrections",
+        headers=idempotency("correction-hypothesis-inaccurate-replacement"),
+        json={
+            "expected_snapshot_id": current_snapshot["id"],
+            "target_type": "hypothesis",
+            "target_id": hypothesis_data["id"],
+            "correction_type": "inaccurate",
+            "original_value": hypothesis_data["content"],
+            "corrected_value": corrected_content,
+            "reason": "原判断不准确，但存在另一条更具体的待验证判断。",
+        },
+    )
+
+    assert response.status_code == 201
+    replacement_data = response.json()["data"]["snapshot"]["hypotheses"][0]
+    assert replacement_data["id"] != hypothesis_data["id"]
+    assert replacement_data["content"] == corrected_content
+    with SessionLocal() as session:
+        original = session.get(Hypothesis, hypothesis_data["id"])
+        replacement = session.get(Hypothesis, replacement_data["id"])
+        assert original is not None
+        assert original.status == "denied"
+        assert original.superseded_by_id == replacement_data["id"]
+        assert replacement is not None
+        assert replacement.status == "pending"
+        assert replacement.semantic_key != original.semantic_key
 
 
 def test_openapi_exposes_thread_and_correction_idempotency(client: TestClient) -> None:
@@ -277,6 +455,7 @@ def test_openapi_exposes_thread_and_correction_idempotency(client: TestClient) -
     )
     correction_schema = schema["components"]["schemas"]["UserCorrectionCreate"]
     assert set(correction_schema["required"]) == {
+        "expected_snapshot_id",
         "target_type",
         "target_id",
         "correction_type",

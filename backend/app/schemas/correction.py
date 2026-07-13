@@ -18,6 +18,7 @@ CorrectionType = Literal["accurate", "partial", "inaccurate", "changed", "discon
 
 
 class UserCorrectionCreate(BaseModel):
+    expected_snapshot_id: str = Field(min_length=36, max_length=36)
     target_type: CorrectionTargetType
     target_id: str = Field(min_length=1, max_length=36)
     correction_type: CorrectionType

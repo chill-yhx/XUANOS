@@ -11,6 +11,12 @@ from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
 from app.repositories.workflow import WorkflowRepository
+from app.rules.hypothesis_lifecycle import (
+    EXECUTION_AVOIDANCE_CATEGORY,
+    EXECUTION_AVOIDANCE_CONTENT,
+    hypothesis_semantic_key,
+    is_active_hypothesis,
+)
 from app.rules.understanding_mock import QUESTION_MAP, QUESTIONS, generate_understanding
 from app.schemas.snapshot import SnapshotRead
 from app.schemas.understanding import (
@@ -112,11 +118,7 @@ class UnderstandingService:
             goal = self._ensure_goal(understanding)
             self._ensure_constraint(understanding, goal)
             hypothesis = self._ensure_hypothesis(thread.id)
-            hypotheses = (
-                []
-                if hypothesis.user_attitude == "rejected" or hypothesis.status in {"denied", "expired"}
-                else [self._hypothesis_frontend(hypothesis)]
-            )
+            hypotheses = [self._hypothesis_frontend(hypothesis)] if is_active_hypothesis(hypothesis) else []
             snapshot = SnapshotService(self.session, self.user_id).create_version(
                 source_thread_id=thread.id,
                 current_vector=goal.desired_outcome,
@@ -326,14 +328,19 @@ class UnderstandingService:
         )
 
     def _ensure_hypothesis(self, thread_id: str) -> Hypothesis:
-        hypothesis = self.workflow.hypothesis(thread_id, "execution_avoidance")
+        semantic_key = hypothesis_semantic_key(EXECUTION_AVOIDANCE_CATEGORY, EXECUTION_AVOIDANCE_CONTENT)
+        hypothesis = self.workflow.active_hypothesis(thread_id, EXECUTION_AVOIDANCE_CATEGORY)
+        if hypothesis:
+            return hypothesis
+        hypothesis = self.workflow.hypothesis_by_semantic_key(thread_id, semantic_key)
         if hypothesis:
             return hypothesis
         hypothesis = Hypothesis(
             user_id=self.user_id,
             thread_id=thread_id,
-            content="用户可能通过继续完善文档推迟真实开发",
-            category="execution_avoidance",
+            content=EXECUTION_AVOIDANCE_CONTENT,
+            category=EXECUTION_AVOIDANCE_CATEGORY,
+            semantic_key=semantic_key,
             status="pending",
             confidence_internal=0.5,
             supporting_evidence=[],

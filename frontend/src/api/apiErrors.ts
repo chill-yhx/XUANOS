@@ -76,6 +76,9 @@ export function toCorrectionApiErrorState(error: unknown): ApiErrorState {
   if (state.code === 'RESOURCE_NOT_FOUND') {
     return { ...state, message: '当前系统条目已经变化，请刷新后重新纠正。' }
   }
+  if (state.code === 'STALE_SNAPSHOT') {
+    return { ...state, message: '系统状态已经更新，请检查最新内容后重新提交。' }
+  }
   if (state.code === 'VALIDATION_ERROR') {
     return { ...state, message: '纠正内容未通过校验，请检查后重试。' }
   }
@@ -112,6 +115,9 @@ function publicApiError(error: ApiError): { code: string; message: string } {
   }
   if (error.code === 'DUPLICATE_SUBMISSION') {
     return { code: error.code, message: '检测到重复提交，请确认内容后重试。' }
+  }
+  if (error.code === 'STALE_SNAPSHOT') {
+    return { code: error.code, message: '系统状态已经更新，请检查最新内容后重新提交。' }
   }
   if (error.code === 'VERSION_CONFLICT') {
     return { code: error.code, message: '计划版本已经变化，请同步最新版本后重试。' }

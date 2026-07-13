@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { toApiErrorState, toCorrectionApiErrorState } from '../api/apiErrors'
+import { normalizeApiError, toApiErrorState, toCorrectionApiErrorState } from '../api/apiErrors'
 import { AUTH_SESSION_INVALIDATED_EVENT } from '../api/authSession'
 import { clearIdempotencyStore } from '../api/idempotency'
 import { submitActionResult as submitActionResultOnServer } from '../services/actionResultService'
@@ -551,7 +551,22 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         }
         return true
       } catch (error) {
-        dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: toCorrectionApiErrorState(error) })
+        const normalized = normalizeApiError(error)
+        const correctionError = toCorrectionApiErrorState(normalized)
+        if (normalized.code === 'STALE_SNAPSHOT') {
+          try {
+            const latestSnapshot = await getCurrentSnapshot()
+            dispatch({
+              type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED',
+              snapshot: latestSnapshot,
+              error: correctionError,
+            })
+          } catch {
+            dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError })
+          }
+        } else {
+          dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError })
+        }
         return false
       }
     })()

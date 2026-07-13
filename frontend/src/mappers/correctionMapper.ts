@@ -69,6 +69,12 @@ function targetTypeFromDto(value: string): CorrectionTargetType {
 export function toCorrectionRequest(input: SubmitCorrectionInput): UserCorrectionCreateDto {
   const originalValue = input.target.originalValue.trim()
   const correctedValue = input.correctedValue.trim()
+  if (!input.previousSnapshot.id) {
+    throw new ApiError('当前纠正缺少服务端快照版本。', {
+      code: 'VALIDATION_ERROR',
+      status: 422,
+    })
+  }
   if (!originalValue) {
     throw new ApiError('当前纠正目标没有可提交的内容。', {
       code: 'VALIDATION_ERROR',
@@ -83,6 +89,7 @@ export function toCorrectionRequest(input: SubmitCorrectionInput): UserCorrectio
   }
 
   return {
+    expected_snapshot_id: input.previousSnapshot.id,
     target_type: input.target.targetType,
     target_id: input.target.targetId,
     correction_type: input.correctionType,

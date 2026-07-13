@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.action_result import ActionResult
@@ -7,6 +7,7 @@ from app.models.hypothesis import Hypothesis
 from app.models.plan import Plan, PlanItem
 from app.models.thread import Thread
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
+from app.rules.hypothesis_lifecycle import TERMINAL_HYPOTHESIS_STATUSES
 
 
 class WorkflowRepository:
@@ -78,10 +79,36 @@ class WorkflowRepository:
             .limit(1)
         )
 
-    def hypothesis(self, thread_id: str, category: str) -> Hypothesis | None:
+    def active_hypothesis(self, thread_id: str, category: str) -> Hypothesis | None:
         return self.session.scalar(
-            select(Hypothesis).where(Hypothesis.thread_id == thread_id, Hypothesis.category == category)
+            select(Hypothesis)
+            .where(
+                Hypothesis.thread_id == thread_id,
+                Hypothesis.category == category,
+                Hypothesis.status.not_in(TERMINAL_HYPOTHESIS_STATUSES),
+                or_(Hypothesis.user_attitude.is_(None), Hypothesis.user_attitude != "rejected"),
+            )
+            .order_by(Hypothesis.created_at.desc(), Hypothesis.id.desc())
+            .limit(1)
         )
 
-    def hypotheses(self, thread_id: str) -> list[Hypothesis]:
-        return list(self.session.scalars(select(Hypothesis).where(Hypothesis.thread_id == thread_id)))
+    def hypothesis_by_semantic_key(self, thread_id: str, semantic_key: str) -> Hypothesis | None:
+        return self.session.scalar(
+            select(Hypothesis).where(
+                Hypothesis.thread_id == thread_id,
+                Hypothesis.semantic_key == semantic_key,
+            )
+        )
+
+    def active_hypotheses(self, thread_id: str) -> list[Hypothesis]:
+        return list(
+            self.session.scalars(
+                select(Hypothesis)
+                .where(
+                    Hypothesis.thread_id == thread_id,
+                    Hypothesis.status.not_in(TERMINAL_HYPOTHESIS_STATUSES),
+                    or_(Hypothesis.user_attitude.is_(None), Hypothesis.user_attitude != "rejected"),
+                )
+                .order_by(Hypothesis.created_at, Hypothesis.id)
+            )
+        )

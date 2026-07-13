@@ -139,6 +139,7 @@ export interface CorrectionDto {
 }
 
 export interface UserCorrectionCreateDto {
+  expected_snapshot_id: string
   target_type: string
   target_id: string
   correction_type: string

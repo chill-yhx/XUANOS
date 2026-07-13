@@ -9,6 +9,12 @@ from app.models.action_result import ActionResult
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import UserCorrection
 from app.repositories.workflow import WorkflowRepository
+from app.rules.hypothesis_lifecycle import (
+    EXECUTION_AVOIDANCE_CATEGORY,
+    EXECUTION_AVOIDANCE_CONTENT,
+    hypothesis_semantic_key,
+    is_active_hypothesis,
+)
 from app.rules.revision_mock import analyze_feedback
 from app.schemas.action_result import (
     ActionResultCreate,
@@ -80,22 +86,26 @@ class ActionService:
         self.session.add(action)
         self.session.flush()
 
-        hypothesis = self.workflow.hypothesis(thread.id, "execution_avoidance")
+        semantic_key = hypothesis_semantic_key(EXECUTION_AVOIDANCE_CATEGORY, EXECUTION_AVOIDANCE_CONTENT)
+        hypothesis = self.workflow.active_hypothesis(thread.id, EXECUTION_AVOIDANCE_CATEGORY)
         if hypothesis is None:
-            hypothesis = Hypothesis(
-                user_id=self.user_id,
-                thread_id=thread.id,
-                content="用户可能通过继续完善文档推迟真实开发",
-                category="execution_avoidance",
-                status="pending",
-                supporting_evidence=[],
-                opposing_evidence=[],
-                requires_confirmation=True,
-            )
-            self.session.add(hypothesis)
-            self.session.flush()
+            hypothesis = self.workflow.hypothesis_by_semantic_key(thread.id, semantic_key)
+            if hypothesis is None:
+                hypothesis = Hypothesis(
+                    user_id=self.user_id,
+                    thread_id=thread.id,
+                    content=EXECUTION_AVOIDANCE_CONTENT,
+                    category=EXECUTION_AVOIDANCE_CATEGORY,
+                    semantic_key=semantic_key,
+                    status="pending",
+                    supporting_evidence=[],
+                    opposing_evidence=[],
+                    requires_confirmation=True,
+                )
+                self.session.add(hypothesis)
+                self.session.flush()
         evidence = {"action_result_id": action.id, "progress_percent": action.progress_percent}
-        if hypothesis.user_attitude != "rejected":
+        if is_active_hypothesis(hypothesis):
             hypothesis.status = decision.hypothesis_status
             hypothesis.last_reviewed_at = datetime.now(UTC)
             if decision.hypothesis_status == "denied":
@@ -124,11 +134,7 @@ class ActionService:
         patterns = list(current_snapshot.effective_patterns)
         if not any(item.get("content") == decision.pattern for item in patterns):
             patterns.append({"content": decision.pattern, "maturity": "candidate"})
-        hypothesis_payload = [
-            self._hypothesis_frontend(item)
-            for item in self.workflow.hypotheses(thread.id)
-            if item.user_attitude != "rejected" and item.status not in {"denied", "expired"}
-        ]
+        hypothesis_payload = [self._hypothesis_frontend(item) for item in self.workflow.active_hypotheses(thread.id)]
         snapshot = SnapshotService(self.session, self.user_id).create_version(
             source_thread_id=thread.id,
             source_action_result_id=action.id,

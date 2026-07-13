@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import status
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
@@ -12,7 +13,14 @@ from app.models.hypothesis import Hypothesis
 from app.models.plan import Plan
 from app.models.snapshot import UserSnapshot
 from app.models.understanding import UnderstandingSession, UserCorrection
+from app.models.user import User
+from app.repositories.workflow import WorkflowRepository
 from app.rules.correction_mock import decide_correction
+from app.rules.hypothesis_lifecycle import (
+    REPLACEMENT_CORRECTION_TYPES,
+    hypothesis_semantic_key,
+    is_terminal_hypothesis,
+)
 from app.schemas.correction import UserCorrectionCreate, UserCorrectionRead, UserCorrectionResult
 from app.schemas.snapshot import SnapshotRead
 from app.services.snapshot_service import SnapshotService
@@ -33,9 +41,9 @@ class CorrectionService:
         self.session = session
         self.user_id = user_id
         self.snapshots = SnapshotService(session, user_id)
+        self.workflow = WorkflowRepository(session)
 
     def create(self, payload: UserCorrectionCreate, idempotency_key: str) -> dict:
-        current_snapshot = self.snapshots.get_current()
         manager = IdempotencyManager(
             self.session,
             self.user_id,
@@ -46,6 +54,9 @@ class CorrectionService:
         if replay := manager.replay():
             return replay
 
+        current_snapshot = self.snapshots.get_current()
+        if replay := self._lock_expected_snapshot(payload.expected_snapshot_id, current_snapshot, manager):
+            return replay
         target, thread_id = self._resolve_target(payload, current_snapshot)
         decision = decide_correction(payload.correction_type, payload.target_type)
         correction = UserCorrection(
@@ -62,11 +73,16 @@ class CorrectionService:
         )
         self.session.add(correction)
         self.session.flush()
-        self._apply_target_attitude(target, payload, correction.id)
         replacement_hypothesis = self._create_replacement_hypothesis(
             target,
             payload,
             correction.id,
+        )
+        self._apply_target_attitude(
+            target,
+            payload,
+            correction.id,
+            replacement_hypothesis.id if replacement_hypothesis else None,
         )
 
         snapshot = current_snapshot
@@ -97,6 +113,42 @@ class CorrectionService:
         self.session.commit()
         return data
 
+    def _lock_expected_snapshot(
+        self,
+        expected_snapshot_id: str,
+        current_snapshot: UserSnapshot,
+        idempotency: IdempotencyManager,
+    ) -> dict[str, Any] | None:
+        if expected_snapshot_id != current_snapshot.id:
+            raise self._stale_snapshot_error(expected_snapshot_id, current_snapshot)
+
+        claimed = self.session.execute(
+            update(User)
+            .where(User.id == self.user_id, User.current_snapshot_id == expected_snapshot_id)
+            .values(updated_at=datetime.now(UTC))
+        )
+        if claimed.rowcount == 1:
+            return None
+
+        self.session.expire_all()
+        if replay := idempotency.replay():
+            return replay
+        latest_snapshot = self.snapshots.get_current()
+        raise self._stale_snapshot_error(expected_snapshot_id, latest_snapshot)
+
+    @staticmethod
+    def _stale_snapshot_error(expected_snapshot_id: str, current_snapshot: UserSnapshot) -> APIError:
+        return APIError(
+            status.HTTP_409_CONFLICT,
+            "STALE_SNAPSHOT",
+            "系统状态已经更新，请检查最新内容后重新提交。",
+            {
+                "expected_snapshot_id": expected_snapshot_id,
+                "current_snapshot_id": current_snapshot.id,
+                "current_snapshot_version": current_snapshot.version,
+            },
+        )
+
     def _resolve_target(
         self,
         payload: UserCorrectionCreate,
@@ -125,7 +177,12 @@ class CorrectionService:
         return target, thread_id
 
     @staticmethod
-    def _apply_target_attitude(target: object | None, payload: UserCorrectionCreate, correction_id: str) -> None:
+    def _apply_target_attitude(
+        target: object | None,
+        payload: UserCorrectionCreate,
+        correction_id: str,
+        replacement_hypothesis_id: str | None,
+    ) -> None:
         if not isinstance(target, Hypothesis):
             return
         evidence = {"user_correction_id": correction_id, "correction_type": payload.correction_type}
@@ -136,12 +193,22 @@ class CorrectionService:
             target.supporting_evidence = [*target.supporting_evidence, evidence]
         elif payload.correction_type == "partial":
             target.user_attitude = "partial"
-            target.status = "expired"
+            target.status = "superseded"
+            target.opposing_evidence = [*target.opposing_evidence, evidence]
+        elif payload.correction_type == "changed":
+            target.user_attitude = "rejected"
+            target.status = "superseded"
+            target.opposing_evidence = [*target.opposing_evidence, evidence]
+        elif payload.correction_type == "discontinue":
+            target.user_attitude = "rejected"
+            target.status = "discontinued"
             target.opposing_evidence = [*target.opposing_evidence, evidence]
         else:
             target.user_attitude = "rejected"
-            target.status = "expired" if payload.correction_type == "changed" else "denied"
+            target.status = "denied"
             target.opposing_evidence = [*target.opposing_evidence, evidence]
+        if replacement_hypothesis_id:
+            target.superseded_by_id = replacement_hypothesis_id
 
     def _create_replacement_hypothesis(
         self,
@@ -149,16 +216,35 @@ class CorrectionService:
         payload: UserCorrectionCreate,
         correction_id: str,
     ) -> Hypothesis | None:
-        if not isinstance(target, Hypothesis) or payload.correction_type != "partial":
+        if not isinstance(target, Hypothesis) or payload.correction_type not in REPLACEMENT_CORRECTION_TYPES:
             return None
+        corrected_content = payload.corrected_value.strip()
+        semantic_key = hypothesis_semantic_key(target.category, corrected_content)
+        if semantic_key == target.semantic_key:
+            raise APIError(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "VALIDATION_ERROR",
+                "修正后的判断必须与原判断不同。",
+            )
+        existing = self.workflow.hypothesis_by_semantic_key(target.thread_id, semantic_key)
+        if existing is not None:
+            if is_terminal_hypothesis(existing):
+                raise APIError(
+                    status.HTTP_409_CONFLICT,
+                    "HYPOTHESIS_TERMINATED",
+                    "该判断已被终止，系统不会静默恢复它。",
+                    {"hypothesis_id": existing.id},
+                )
+            return existing
         replacement = Hypothesis(
             user_id=target.user_id,
             thread_id=target.thread_id,
-            content=payload.corrected_value.strip(),
+            content=corrected_content,
             category=target.category,
+            semantic_key=semantic_key,
             status="pending",
             confidence_internal=None,
-            supporting_evidence=[{"user_correction_id": correction_id, "correction_type": "partial"}],
+            supporting_evidence=[{"user_correction_id": correction_id, "correction_type": payload.correction_type}],
             opposing_evidence=[],
             requires_confirmation=False,
             user_attitude="accepted",
@@ -289,7 +375,11 @@ class CorrectionService:
         result = [
             deepcopy(item) for item in hypotheses if item.get("id") != target_id and item.get("content") != original
         ]
-        if payload.correction_type == "partial" and not any(item.get("content") == corrected for item in result):
+        if (
+            payload.correction_type in REPLACEMENT_CORRECTION_TYPES
+            and replacement_hypothesis_id
+            and not any(item.get("content") == corrected for item in result)
+        ):
             result.insert(
                 0,
                 {

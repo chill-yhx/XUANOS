@@ -64,6 +64,7 @@ export type InteractionAction =
   | { type: 'UPDATE_CORRECTION_CONFIRMATION'; confirmed: boolean }
   | { type: 'CORRECTION_REQUEST_STARTED' }
   | { type: 'CORRECTION_REQUEST_SUCCEEDED'; result: UserCorrectionResult }
+  | { type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED'; snapshot: SystemSnapshot; error: ApiErrorState }
   | { type: 'CORRECTION_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'CORRECTION_READBACK_FAILED'; error: ApiErrorState }
   | { type: 'RESET_DEMO_DATA' }
@@ -769,17 +770,24 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         actionResultApiError: action.error,
       }
 
-    case 'OPEN_CORRECTION_TARGET':
+    case 'OPEN_CORRECTION_TARGET': {
+      const resumesStaleDraft = Boolean(
+        state.correctionApiError?.code === 'STALE_SNAPSHOT'
+        && state.activeCorrectionTarget?.key === action.target.key,
+      )
       return {
         ...state,
         activeCorrectionTarget: action.target,
-        correctionType: null,
-        correctionDraft: '',
-        correctionReason: '',
-        correctionDiscontinueConfirmed: false,
+        correctionType: resumesStaleDraft ? state.correctionType : null,
+        correctionDraft: resumesStaleDraft ? state.correctionDraft : '',
+        correctionReason: resumesStaleDraft ? state.correctionReason : '',
+        correctionDiscontinueConfirmed: resumesStaleDraft
+          ? state.correctionDiscontinueConfirmed
+          : false,
         correctionRequestStatus: 'idle',
         correctionApiError: null,
       }
+    }
 
     case 'CLOSE_CORRECTION_TARGET':
       if (state.correctionRequestStatus === 'loading') return state
@@ -843,6 +851,26 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         snapshotVersion: result.snapshot.version,
         systemSnapshot: result.snapshot,
         apiError: null,
+        isOfflineCache: false,
+        dataSource: 'api',
+      }
+    }
+
+    case 'CORRECTION_STALE_SNAPSHOT_REFRESHED': {
+      const snapshot = state.serverSnapshot && state.serverSnapshot.version > action.snapshot.version
+        ? state.serverSnapshot
+        : action.snapshot
+      return {
+        ...state,
+        correctionRequestStatus: 'error',
+        correctionApiError: action.error,
+        serverSnapshot: snapshot,
+        latestSnapshot: snapshot,
+        snapshotId: snapshot.id,
+        snapshotVersion: snapshot.version,
+        systemSnapshot: snapshot,
+        previousSnapshot: null,
+        snapshotDiff: null,
         isOfflineCache: false,
         dataSource: 'api',
       }

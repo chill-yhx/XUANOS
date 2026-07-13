@@ -126,10 +126,12 @@ def test_users_cannot_read_or_mutate_each_others_workflow(client: TestClient) ->
             "obstacle_code": "other",
         },
     )
+    snapshot_b = client.get("/api/users/me/snapshot", headers=auth_b).json()["data"]
     correction = client.post(
         "/api/users/me/corrections",
         headers=write_headers(auth_b, "identity-b-correct-a-hypothesis"),
         json={
+            "expected_snapshot_id": snapshot_b["id"],
             "target_type": "hypothesis",
             "target_id": hypothesis["id"],
             "correction_type": "inaccurate",
