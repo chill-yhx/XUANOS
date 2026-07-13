@@ -3,10 +3,9 @@ import { Tag } from './Tag'
 
 interface SystemSnapshotCardProps {
   section: SystemSection
-  onAction: (action: string, section: SystemSection) => void
 }
 
-export function SystemSnapshotCard({ section, onAction }: SystemSnapshotCardProps) {
+export function SystemSnapshotCard({ section }: SystemSnapshotCardProps) {
   return (
     <section className="system-snapshot-card">
       <div className="system-card-head">
@@ -16,18 +15,12 @@ export function SystemSnapshotCard({ section, onAction }: SystemSnapshotCardProp
         </div>
         <Tag tone={section.tone}>{section.tone === 'impact' ? '待验证' : '当前'}</Tag>
       </div>
-      <ul>
-        {section.entries.map((entry, index) => <li key={`${section.id}-${index}`}>{entry}</li>)}
-      </ul>
+      {section.entries.length ? (
+        <ul>
+          {section.entries.map((entry, index) => <li key={`${section.id}-${index}`}>{entry}</li>)}
+        </ul>
+      ) : <p className="snapshot-no-change">暂无服务端记录。</p>}
       {section.footnote && <div className="system-footnote">{section.footnote}</div>}
-      <details className="snapshot-corrections">
-        <summary>纠正此条</summary>
-        <div className="system-action-row">
-          {['准确', '部分准确', '不准确', '已经变化', '查看依据', '不希望继续使用'].map((action) => (
-            <button key={action} className="snapshot-action" type="button" onClick={() => onAction(action, section)}>{action}</button>
-          ))}
-        </div>
-      </details>
     </section>
   )
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { toApiErrorState } from '../api/apiErrors'
+import { toApiErrorState, toCorrectionApiErrorState } from '../api/apiErrors'
 import { submitActionResult as submitActionResultOnServer } from '../services/actionResultService'
+import { submitUserCorrection } from '../services/correctionService'
 import { getCurrentSnapshot } from '../services/snapshotService'
 import {
   acceptPlan as acceptPlanOnServer,
@@ -14,6 +15,7 @@ import {
 } from '../services/understandingService'
 import type {
   ApiErrorState,
+  CorrectionType,
   ExpressionMode,
   InteractionStep,
   PageId,
@@ -43,6 +45,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const understandingRequestRef = useRef<Promise<boolean> | null>(null)
   const planRequestRef = useRef<Promise<boolean> | null>(null)
   const actionResultRequestRef = useRef<Promise<boolean> | null>(null)
+  const correctionRequestRef = useRef<Promise<boolean> | null>(null)
 
   useEffect(() => {
     stateRef.current = state
@@ -225,7 +228,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
       if (!sessionId) {
         return failUnderstandingGuard('理解会话尚未建立，无法确认。')
       }
-      if (!current.serverUnderstanding || current.understandingSource === 'mock') {
+      if (!current.serverUnderstanding || current.understandingSource !== 'api') {
         return failUnderstandingGuard('当前不是可确认的服务端理解结果。')
       }
       if (assessment !== 'accurate' && !correction?.trim()) {
@@ -461,6 +464,72 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     }
   }, [failActionResultGuard])
 
+  const failCorrectionGuard = useCallback((message: string) => {
+    const error: ApiErrorState = {
+      code: 'INVALID_FLOW_STATE',
+      message,
+      status: null,
+      requestId: null,
+    }
+    dispatch({ type: 'CORRECTION_REQUEST_FAILED', error })
+    return false
+  }, [])
+
+  const submitCurrentCorrection = useCallback(async () => {
+    const current = stateRef.current
+    const target = current.activeCorrectionTarget
+    const correctionType = current.correctionType
+    const snapshot = current.latestSnapshot ?? current.serverSnapshot
+
+    if (!current.activeThreadId) return failCorrectionGuard('没有真实任务线程，不能提交纠正。')
+    if (!target || !correctionType) return failCorrectionGuard('请先选择纠正对象和纠正类型。')
+    if (!snapshot?.id || current.dataSource !== 'api' || current.isOfflineCache) {
+      return failCorrectionGuard('无法连接 XUANOS 服务，纠正草稿已保留。')
+    }
+    if (target.snapshotId !== snapshot.id || target.snapshotVersion !== snapshot.version) {
+      return failCorrectionGuard('当前系统条目已经变化，请刷新后重新纠正。')
+    }
+    if (
+      ['partial', 'inaccurate', 'changed'].includes(correctionType)
+      && !current.correctionDraft.trim()
+    ) return failCorrectionGuard('请填写修正后的内容。')
+    if (correctionType === 'discontinue' && !current.correctionDiscontinueConfirmed) {
+      return failCorrectionGuard('请确认系统以后不再使用这条判断。')
+    }
+    if (current.correctionRequestStatus === 'loading') return false
+    if (correctionRequestRef.current) return correctionRequestRef.current
+
+    const request = (async () => {
+      dispatch({ type: 'CORRECTION_REQUEST_STARTED' })
+      try {
+        const result = await submitUserCorrection({
+          target,
+          correctionType: correctionType as CorrectionType,
+          correctedValue: current.correctionDraft,
+          reason: current.correctionReason,
+          previousSnapshot: snapshot,
+        })
+        dispatch({ type: 'CORRECTION_REQUEST_SUCCEEDED', result })
+        try {
+          const aggregate = await getThread(current.activeThreadId!)
+          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+        } catch (error) {
+          dispatch({ type: 'CORRECTION_READBACK_FAILED', error: toApiErrorState(error) })
+        }
+        return true
+      } catch (error) {
+        dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: toCorrectionApiErrorState(error) })
+        return false
+      }
+    })()
+    correctionRequestRef.current = request
+    try {
+      return await request
+    } finally {
+      if (correctionRequestRef.current === request) correctionRequestRef.current = null
+    }
+  }, [failCorrectionGuard])
+
   const resetDemo = () => {
     clearIntegrationCache()
     dispatch({ type: 'RESET_DEMO_DATA' })
@@ -483,6 +552,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         acceptCurrentPlan,
         refreshActiveThread,
         submitCurrentActionResult,
+        submitCurrentCorrection,
         continuePage: pageForStep(state.currentStep),
       }}
     >

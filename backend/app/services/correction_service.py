@@ -62,10 +62,21 @@ class CorrectionService:
         self.session.add(correction)
         self.session.flush()
         self._apply_target_attitude(target, payload, correction.id)
+        replacement_hypothesis = self._create_replacement_hypothesis(
+            target,
+            payload,
+            correction.id,
+        )
 
         snapshot = current_snapshot
         if decision.snapshot_required:
-            changes = self._snapshot_changes(current_snapshot, payload, target, correction.id)
+            changes = self._snapshot_changes(
+                current_snapshot,
+                payload,
+                target,
+                correction.id,
+                replacement_hypothesis.id if replacement_hypothesis else None,
+            )
             snapshot = self.snapshots.create_version(
                 source_thread_id=thread_id or current_snapshot.source_thread_id,
                 recent_revision=decision.recent_revision,
@@ -124,11 +135,37 @@ class CorrectionService:
             target.supporting_evidence = [*target.supporting_evidence, evidence]
         elif payload.correction_type == "partial":
             target.user_attitude = "partial"
+            target.status = "expired"
             target.opposing_evidence = [*target.opposing_evidence, evidence]
         else:
             target.user_attitude = "rejected"
             target.status = "expired" if payload.correction_type == "changed" else "denied"
             target.opposing_evidence = [*target.opposing_evidence, evidence]
+
+    def _create_replacement_hypothesis(
+        self,
+        target: object | None,
+        payload: UserCorrectionCreate,
+        correction_id: str,
+    ) -> Hypothesis | None:
+        if not isinstance(target, Hypothesis) or payload.correction_type != "partial":
+            return None
+        replacement = Hypothesis(
+            user_id=target.user_id,
+            thread_id=target.thread_id,
+            content=payload.corrected_value.strip(),
+            category=target.category,
+            status="pending",
+            confidence_internal=None,
+            supporting_evidence=[{"user_correction_id": correction_id, "correction_type": "partial"}],
+            opposing_evidence=[],
+            requires_confirmation=False,
+            user_attitude="accepted",
+            last_reviewed_at=datetime.now(UTC),
+        )
+        self.session.add(replacement)
+        self.session.flush()
+        return replacement
 
     def _snapshot_changes(
         self,
@@ -136,6 +173,7 @@ class CorrectionService:
         payload: UserCorrectionCreate,
         target: object | None,
         correction_id: str,
+        replacement_hypothesis_id: str | None = None,
     ) -> dict[str, Any]:
         if payload.target_type == "goal":
             return {
@@ -163,6 +201,7 @@ class CorrectionService:
                     payload,
                     correction_id,
                     target.id,
+                    replacement_hypothesis_id,
                 )
             }
         if payload.target_type == "system_section":
@@ -242,6 +281,7 @@ class CorrectionService:
         payload: UserCorrectionCreate,
         correction_id: str,
         target_id: str | None = None,
+        replacement_hypothesis_id: str | None = None,
     ) -> list[dict[str, Any]]:
         original = payload.original_value.strip()
         corrected = payload.corrected_value.strip()
@@ -249,5 +289,12 @@ class CorrectionService:
             deepcopy(item) for item in hypotheses if item.get("id") != target_id and item.get("content") != original
         ]
         if payload.correction_type == "partial" and not any(item.get("content") == corrected for item in result):
-            result.insert(0, {"id": f"correction-{correction_id}", "content": corrected, "status": "pending"})
+            result.insert(
+                0,
+                {
+                    "id": replacement_hypothesis_id or f"correction-{correction_id}",
+                    "content": corrected,
+                    "status": "pending",
+                },
+            )
         return result

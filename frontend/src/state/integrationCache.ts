@@ -1,6 +1,6 @@
-import { createInitialSession } from '../data/interactionMock'
 import { understandingQuestionAt } from '../data/understandingQuestions'
 import type { ActionObstacleCode, DemoSessionState, FeedbackPayload, InteractionStep } from '../types'
+import { createInitialSession } from './initialState'
 
 const STORAGE_KEY = 'xuanos:demo-user:integration-cache:v2'
 const LEGACY_STORAGE_KEY = 'xuanos:demo-user:session:v1'
@@ -73,13 +73,25 @@ interface IntegrationCache {
     | 'systemRevisionAt'
   >
   feedbackDraft: Pick<DemoSessionState, 'actionFeedback'>
-  mock: Pick<
+  correction: Pick<
+    DemoSessionState,
+    | 'activeCorrectionTarget'
+    | 'correctionType'
+    | 'correctionDraft'
+    | 'correctionReason'
+    | 'correctionDiscontinueConfirmed'
+    | 'latestCorrectionId'
+    | 'latestCorrectionAt'
+    | 'latestCorrectionResult'
+  >
+  ui: Pick<
     DemoSessionState,
     | 'currentStep'
     | 'uiThreadStatus'
     | 'uiThreadPhase'
     | 'systemSnapshot'
   >
+  mock?: IntegrationCache['ui']
 }
 
 const obstacleCodes = new Set<ActionObstacleCode>([
@@ -136,32 +148,39 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   const planDrafts = parsed.planDrafts
   const actions = parsed.actions
   const feedbackDraft = parsed.feedbackDraft
-  const mock = parsed.mock
+  const correction = parsed.correction
+  const ui = parsed.ui ?? parsed.mock
   const serverSnapshot = server?.serverSnapshot ?? null
   const activeThread = server?.activeThread ?? null
-  const cachedStep = isStep(mock?.currentStep) ? mock.currentStep : fallback.currentStep
+  const cachedStep = isStep(ui?.currentStep) ? ui.currentStep : fallback.currentStep
   const currentStep = cachedStep === 'feedback_submitted' ? 'action_pending' : cachedStep
   const serverStep = isStep(server?.serverStep) ? server.serverStep : fallback.serverStep
-  const legacyMock = mock as Partial<DemoSessionState> | undefined
-  const submittedAnswers = cachedUnderstanding?.submittedAnswers ?? legacyMock?.answers ?? {}
+  const legacyUi = ui as Partial<DemoSessionState> | undefined
+  const submittedAnswers = cachedUnderstanding?.submittedAnswers ?? legacyUi?.answers ?? {}
   const currentQuestionIndex = cachedUnderstanding?.currentQuestionIndex
-    ?? legacyMock?.currentQuestionIndex
+    ?? legacyUi?.currentQuestionIndex
     ?? 0
   const currentQuestion = cachedUnderstanding?.currentQuestion
     ?? (currentStep === 'asking_question' ? understandingQuestionAt(currentQuestionIndex) : null)
-  const serverUnderstanding = cachedUnderstanding?.serverUnderstanding ?? legacyMock?.understanding ?? null
+  const serverUnderstanding = cachedUnderstanding?.serverUnderstanding ?? legacyUi?.understanding ?? null
   const hasUnderstandingCache = Boolean(cachedUnderstanding?.understandingSessionId || serverUnderstanding)
   const cachedCurrentPlan = plans?.currentPlan ?? null
   const cachedPlanVersions = plans?.planVersions ?? []
   const hasPlanCache = Boolean(cachedCurrentPlan || cachedPlanVersions.length)
-  const latestSnapshot = actions?.latestSnapshot
-    && (!serverSnapshot || actions.latestSnapshot.version >= serverSnapshot.version)
-    ? actions.latestSnapshot
-    : serverSnapshot
-  const latestActionResult = actions?.latestActionResult ?? legacyMock?.latestActionResult ?? null
+  const snapshotCandidates = [
+    serverSnapshot,
+    actions?.latestSnapshot,
+    correction?.latestCorrectionResult?.snapshot,
+  ].filter((snapshot): snapshot is NonNullable<typeof snapshot> => Boolean(snapshot))
+  const latestSnapshot = snapshotCandidates.reduce(
+    (latest, snapshot) => !latest || snapshot.version >= latest.version ? snapshot : latest,
+    null as DemoSessionState['latestSnapshot'],
+  )
+  const latestActionResult = actions?.latestActionResult ?? legacyUi?.latestActionResult ?? null
+  const latestCorrectionResult = correction?.latestCorrectionResult ?? null
   return {
     ...fallback,
-    ...mock,
+    ...ui,
     schemaVersion: 2,
     currentStep,
     serverStep,
@@ -172,7 +191,7 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     snapshotId: latestSnapshot?.id ?? null,
     snapshotVersion: latestSnapshot?.version ?? null,
     isOfflineCache: Boolean(activeThread || latestSnapshot),
-    dataSource: activeThread || latestSnapshot ? 'cache' : 'mock',
+    dataSource: activeThread || latestSnapshot ? 'cache' : fallback.dataSource,
     isLoading: false,
     apiError: null,
     activeUnderstandingSession: cachedUnderstanding?.activeUnderstandingSession ?? null,
@@ -183,10 +202,10 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     understanding: serverUnderstanding,
     understandingRequestStatus: 'idle',
     understandingApiError: null,
-    understandingSource: hasUnderstandingCache ? 'cache' : 'mock',
+    understandingSource: hasUnderstandingCache ? 'cache' : fallback.understandingSource,
     lastSuccessfulUnderstandingAt: cachedUnderstanding?.lastSuccessfulUnderstandingAt ?? null,
-    expressionMode: drafts?.expressionMode ?? legacyMock?.expressionMode ?? null,
-    userInput: drafts?.userInput ?? legacyMock?.userInput ?? '',
+    expressionMode: drafts?.expressionMode ?? legacyUi?.expressionMode ?? null,
+    userInput: drafts?.userInput ?? legacyUi?.userInput ?? '',
     currentAnswerDraft: drafts?.currentAnswerDraft ?? '',
     understandingAssessmentDraft: drafts?.understandingAssessmentDraft ?? null,
     understandingCorrectionDraft: drafts?.understandingCorrectionDraft ?? '',
@@ -195,13 +214,13 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     answerMeta: cachedUnderstanding?.answerMeta ?? {},
     currentQuestionIndex,
     currentQuestion,
-    corrections: cachedUnderstanding?.corrections ?? legacyMock?.corrections ?? [],
+    corrections: cachedUnderstanding?.corrections ?? legacyUi?.corrections ?? [],
     currentPlan: cachedCurrentPlan,
     planVersions: cachedPlanVersions,
     activePlanId: plans?.activePlanId ?? cachedCurrentPlan?.id ?? null,
     planRequestStatus: 'idle',
     planApiError: null,
-    planSource: hasPlanCache ? 'cache' : 'mock',
+    planSource: hasPlanCache ? 'cache' : fallback.planSource,
     lastSuccessfulPlanAt: plans?.lastSuccessfulPlanAt ?? cachedCurrentPlan?.updatedAt ?? cachedCurrentPlan?.createdAt ?? null,
     lastViewedPlanId: plans?.lastViewedPlanId ?? cachedCurrentPlan?.id ?? null,
     planModificationDraft: {
@@ -210,7 +229,7 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     },
     actionFeedback: restoreFeedbackDraft(
       fallback.actionFeedback,
-      feedbackDraft?.actionFeedback ?? legacyMock?.actionFeedback,
+      feedbackDraft?.actionFeedback ?? legacyUi?.actionFeedback,
     ),
     latestActionResult,
     actionResultId: actions?.actionResultId ?? latestActionResult?.id ?? null,
@@ -218,15 +237,26 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     actionResultSubmittedAt: actions?.actionResultSubmittedAt ?? latestActionResult?.submittedAt ?? null,
     actionResultRequestStatus: 'idle',
     actionResultApiError: null,
-    actionResultSource: latestActionResult ? 'cache' : 'mock',
+    actionResultSource: latestActionResult ? 'cache' : fallback.actionResultSource,
     latestSnapshot,
     previousSnapshot: actions?.previousSnapshot ?? null,
     snapshotDiff: actions?.snapshotDiff ?? null,
     latestActionHypothesis: actions?.latestActionHypothesis ?? null,
-    systemRevision: actions?.systemRevision ?? legacyMock?.systemRevision ?? null,
-    systemRevisionSource: actions?.systemRevision ? 'cache' : 'mock',
+    systemRevision: actions?.systemRevision ?? legacyUi?.systemRevision ?? null,
+    systemRevisionSource: actions?.systemRevision ? 'cache' : fallback.systemRevisionSource,
     systemRevisionAt: actions?.systemRevisionAt ?? latestActionResult?.submittedAt ?? null,
-    systemSnapshot: latestSnapshot ?? mock?.systemSnapshot ?? fallback.systemSnapshot,
+    activeCorrectionTarget: correction?.activeCorrectionTarget ?? null,
+    correctionType: correction?.correctionType ?? null,
+    correctionDraft: correction?.correctionDraft ?? '',
+    correctionReason: correction?.correctionReason ?? '',
+    correctionDiscontinueConfirmed: correction?.correctionDiscontinueConfirmed ?? false,
+    correctionRequestStatus: 'idle',
+    correctionApiError: null,
+    latestCorrectionId: correction?.latestCorrectionId ?? latestCorrectionResult?.correction.id ?? null,
+    latestCorrectionAt: correction?.latestCorrectionAt ?? latestCorrectionResult?.correction.createdAt ?? null,
+    latestCorrectionResult,
+    correctionSource: latestCorrectionResult ? 'cache' : fallback.correctionSource,
+    systemSnapshot: latestSnapshot ?? ui?.systemSnapshot ?? fallback.systemSnapshot,
   }
 }
 
@@ -237,25 +267,12 @@ function restoreLegacy(fallback: DemoSessionState): DemoSessionState {
     const legacy = JSON.parse(raw) as Partial<DemoSessionState>
     return {
       ...fallback,
-      currentStep: isStep(legacy.currentStep) ? legacy.currentStep : fallback.currentStep,
       expressionMode: legacy.expressionMode ?? null,
       userInput: legacy.userInput ?? '',
-      answers: legacy.answers ?? {},
-      submittedAnswers: legacy.answers ?? {},
-      currentQuestionIndex: legacy.currentQuestionIndex ?? 0,
-      currentQuestion: legacy.currentStep === 'asking_question'
-        ? understandingQuestionAt(legacy.currentQuestionIndex ?? 0)
-        : null,
-      understanding: legacy.understanding ?? null,
-      serverUnderstanding: null,
-      understandingSource: 'mock',
-      corrections: legacy.corrections ?? [],
-      currentPlan: legacy.currentPlan ?? null,
-      planVersions: legacy.planVersions ?? [],
-      activePlanId: legacy.currentPlan?.id ?? null,
-      planSource: legacy.currentPlan ? 'mock' : fallback.planSource,
-      lastViewedPlanId: legacy.currentPlan?.id ?? null,
-      systemRevision: legacy.systemRevision ?? null,
+      currentAnswerDraft: legacy.currentAnswerDraft ?? '',
+      understandingCorrectionDraft: legacy.understandingCorrectionDraft ?? '',
+      correctionDraft: legacy.correctionDraft ?? '',
+      correctionReason: legacy.correctionReason ?? '',
     }
   } catch {
     return fallback
@@ -331,7 +348,17 @@ export function writeIntegrationCache(state: DemoSessionState) {
     feedbackDraft: {
       actionFeedback: state.actionFeedback,
     },
-    mock: {
+    correction: {
+      activeCorrectionTarget: state.activeCorrectionTarget,
+      correctionType: state.correctionType,
+      correctionDraft: state.correctionDraft,
+      correctionReason: state.correctionReason,
+      correctionDiscontinueConfirmed: state.correctionDiscontinueConfirmed,
+      latestCorrectionId: state.latestCorrectionId,
+      latestCorrectionAt: state.latestCorrectionAt,
+      latestCorrectionResult: state.latestCorrectionResult,
+    },
+    ui: {
       currentStep: state.currentStep,
       uiThreadStatus: state.uiThreadStatus,
       uiThreadPhase: state.uiThreadPhase,

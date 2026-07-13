@@ -10,6 +10,7 @@ import { SecondaryButton } from '../components/SecondaryButton'
 import { Tag } from '../components/Tag'
 import { TimeBlockPlan } from '../components/TimeBlockPlan'
 import { WarningBanner } from '../components/WarningBanner'
+import { developmentMockEnabled } from '../config/developmentMock'
 import { useInteraction } from '../state/useInteraction'
 
 interface PageProps {
@@ -84,7 +85,9 @@ export function PlanPage({ onNavigate }: PageProps) {
             ? <Tag tone="success">SERVER PLAN</Tag>
             : state.planSource === 'cache'
               ? <Tag tone="impact">OFFLINE CACHE</Tag>
-              : <Tag tone="muted">DEVELOPMENT MOCK</Tag>}
+              : developmentMockEnabled && state.planSource === 'mock'
+                ? <Tag tone="muted">DEVELOPMENT MOCK</Tag>
+                : <Tag tone="muted">WAITING FOR SERVER</Tag>}
           <span>{displayedPlan.createdAt ? new Date(displayedPlan.createdAt).toLocaleString() : ''}</span>
         </div>
       </header>

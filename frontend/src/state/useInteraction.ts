@@ -22,6 +22,7 @@ export interface InteractionContextValue {
   acceptCurrentPlan: () => Promise<boolean>
   refreshActiveThread: () => Promise<boolean>
   submitCurrentActionResult: () => Promise<boolean>
+  submitCurrentCorrection: () => Promise<boolean>
   continuePage: PageId
 }
 

@@ -7,6 +7,7 @@ import { SecondaryButton } from '../components/SecondaryButton'
 import { Tag } from '../components/Tag'
 import { UnderstandingCard } from '../components/UnderstandingCard'
 import { WarningBanner } from '../components/WarningBanner'
+import { developmentMockEnabled } from '../config/developmentMock'
 import { useInteraction } from '../state/useInteraction'
 
 interface PageProps {
@@ -56,7 +57,9 @@ export function UnderstandingPage({ onNavigate }: PageProps) {
     ? <Tag tone="success">SERVER RESULT</Tag>
     : state.understandingSource === 'cache'
       ? <Tag tone="impact">OFFLINE CACHE</Tag>
-      : <Tag tone="muted">DEVELOPMENT MOCK</Tag>
+      : developmentMockEnabled && state.understandingSource === 'mock'
+        ? <Tag tone="muted">DEVELOPMENT MOCK</Tag>
+        : <Tag tone="muted">WAITING FOR SERVER</Tag>
 
   return (
     <section className="page understanding-layout">
@@ -165,7 +168,7 @@ export function UnderstandingPage({ onNavigate }: PageProps) {
               <div className="feedback-choice-row">
                 <PrimaryButton
                   onClick={() => void confirmUnderstanding('accurate')}
-                  disabled={isLoading || state.understandingSource === 'mock'}
+                  disabled={isLoading || state.understandingSource !== 'api'}
                 >
                   {isLoading ? '正在确认' : '准确'}
                 </PrimaryButton>
@@ -185,7 +188,7 @@ export function UnderstandingPage({ onNavigate }: PageProps) {
                 <div className="button-row">
                   <PrimaryButton
                     onClick={() => void confirmUnderstanding(assessment, correction)}
-                    disabled={!correction.trim() || isLoading || state.understandingSource === 'mock'}
+                    disabled={!correction.trim() || isLoading || state.understandingSource !== 'api'}
                   >
                     {isLoading ? '正在保存纠正' : state.understandingApiError ? '重试保存纠正' : '写入本次理解'}
                   </PrimaryButton>

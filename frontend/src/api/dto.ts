@@ -131,6 +131,37 @@ export interface CorrectionDto {
   updated_at: string
 }
 
+export interface UserCorrectionCreateDto {
+  target_type: string
+  target_id: string
+  correction_type: string
+  original_value: string
+  corrected_value: string
+  reason: string
+}
+
+export interface UserCorrectionDto {
+  id: string
+  user_id: string
+  thread_id: string | null
+  target_type: string
+  target_id: string | null
+  correction_type: string
+  original_value: string
+  corrected_value: string
+  reason: string | null
+  system_handling: string | null
+  has_conflict: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface UserCorrectionResultDto {
+  correction: UserCorrectionDto
+  snapshot?: SnapshotDto | null
+  snapshot_updated: boolean
+}
+
 export interface PlanItemDto {
   id: string
   item_type: string

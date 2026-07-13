@@ -20,6 +20,7 @@ export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
     || state.understandingRequestStatus === 'loading'
     || state.planRequestStatus === 'loading'
     || state.actionResultRequestStatus === 'loading'
+    || state.correctionRequestStatus === 'loading'
   const statusLabel = isSyncing
     ? 'SYSTEM SYNCING'
     : state.isOfflineCache

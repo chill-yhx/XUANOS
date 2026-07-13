@@ -1,4 +1,4 @@
-import { navigationItems } from '../data/mockData'
+import { navigationItems } from '../data/navigation'
 import type { PageId } from '../types'
 
 interface SidebarProps {

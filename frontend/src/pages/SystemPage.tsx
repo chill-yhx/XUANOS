@@ -1,27 +1,38 @@
-import { useEffect, useState } from 'react'
-import type { PageId, SystemSection, SystemViewMode } from '../types'
+import { useEffect, useMemo, useState } from 'react'
+import { CorrectionResultNotice } from '../components/CorrectionResultNotice'
+import { CorrectionTargetCard } from '../components/CorrectionTargetCard'
 import { GlassPanel } from '../components/GlassPanel'
 import { PrimaryButton } from '../components/PrimaryButton'
 import { SecondaryButton } from '../components/SecondaryButton'
 import { SnapshotDiffPanel } from '../components/SnapshotDiffPanel'
+import { SystemCorrectionPanel } from '../components/SystemCorrectionPanel'
 import { SystemSnapshotCard } from '../components/SystemSnapshotCard'
 import { SystemViewToggle } from '../components/SystemViewToggle'
 import { Tag } from '../components/Tag'
 import { WarningBanner } from '../components/WarningBanner'
+import { developmentMockEnabled } from '../config/developmentMock'
+import { buildCorrectionTargets } from '../mappers/correctionMapper'
 import { useInteraction } from '../state/useInteraction'
+import type { CorrectionTarget, PageId, SystemSection, SystemViewMode } from '../types'
 
 interface PageProps {
   onNavigate: (page: PageId) => void
 }
 
 export function SystemPage({ onNavigate }: PageProps) {
-  const { state, dispatch, refreshSnapshot, resetDemo } = useInteraction()
+  const {
+    state,
+    dispatch,
+    refreshSnapshot,
+    resetDemo,
+    submitCurrentCorrection,
+  } = useInteraction()
   const [mode, setMode] = useState<SystemViewMode>('mixed')
-  const [notice, setNotice] = useState('')
   const snapshot = state.latestSnapshot ?? state.serverSnapshot ?? state.systemSnapshot
-  const localCorrections = state.corrections
-    .filter((item) => item.assessment === 'system_snapshot')
-    .map((item) => `${item.target}：${item.userValue}（本地演示）`)
+  const correctionTargets = useMemo(
+    () => buildCorrectionTargets(snapshot, state.currentPlan),
+    [snapshot, state.currentPlan],
+  )
 
   useEffect(() => {
     void refreshSnapshot()
@@ -53,17 +64,12 @@ export function SystemPage({ onNavigate }: PageProps) {
     },
     {
       id: 'corrections', title: '用户纠正', english: 'USER CORRECTIONS', tone: 'muted',
-      entries: [...localCorrections, ...snapshot.userCorrections].slice(0, 4),
+      entries: snapshot.userCorrections.slice(0, 4),
     },
   ]
 
-  const handleAction = (action: string, section: SystemSection) => {
-    dispatch({ type: 'ADD_SYSTEM_CORRECTION', action, section })
-    setNotice(`本地演示已记录：“${section.title}”被标记为“${action}”。纠正 API 将在后续批次接入。`)
-  }
-
   const handleReset = () => {
-    if (!window.confirm('重置本地演示进度？本轮不会删除服务端线程与快照。')) return
+    if (!window.confirm('重置本地演示缓存？本轮不会删除服务端线程与快照。')) return
     resetDemo()
     onNavigate('home')
   }
@@ -71,6 +77,10 @@ export function SystemPage({ onNavigate }: PageProps) {
   const startNextFeedback = () => {
     dispatch({ type: 'START_ACTION' })
     onNavigate('feedback')
+  }
+
+  const selectCorrectionTarget = (target: CorrectionTarget) => {
+    dispatch({ type: 'OPEN_CORRECTION_TARGET', target })
   }
 
   const showProfile = mode === 'profile' || mode === 'mixed'
@@ -83,11 +93,23 @@ export function SystemPage({ onNavigate }: PageProps) {
     title: index === 0 ? '最新系统修正' : '历史修正',
     content,
   }))
-  const sourceTag = state.isOfflineCache
+  const sourceTag = state.isOfflineCache || state.dataSource === 'cache'
     ? <Tag tone="impact">OFFLINE CACHE</Tag>
-    : snapshot.id
+    : snapshot.id && state.dataSource === 'api'
       ? <Tag tone="success">SERVER RESULT</Tag>
-      : <Tag tone="muted">DEVELOPMENT MOCK</Tag>
+      : developmentMockEnabled && state.dataSource === 'mock'
+        ? <Tag tone="muted">DEVELOPMENT MOCK</Tag>
+        : <Tag tone="muted">WAITING FOR SERVER</Tag>
+  const correctionResult = state.latestCorrectionResult
+  const correctionResultIsCurrent = Boolean(
+    correctionResult
+    && correctionResult.snapshot.id === snapshot.id
+    && correctionResult.snapshot.version === snapshot.version,
+  )
+  const changeSource = correctionResultIsCurrent
+    ? state.correctionSource
+    : state.systemRevisionSource
+  const correctionIsOffline = state.isOfflineCache || state.dataSource !== 'api'
 
   return (
     <section className="page system-stack">
@@ -102,14 +124,14 @@ export function SystemPage({ onNavigate }: PageProps) {
         </div>
       </header>
 
-      {state.systemRevisionSource !== 'mock' && state.systemRevision && (
-        <WarningBanner tone="gold">我的系统已经因为这次反馈发生变化。当前阶段与唯一行动已更新。</WarningBanner>
+      {state.systemRevision && ['api', 'cache'].includes(state.systemRevisionSource) && (
+        <WarningBanner tone="gold">我的系统已经因为行动反馈发生变化。当前阶段与唯一行动已更新。</WarningBanner>
       )}
       {state.isOfflineCache && (
-        <WarningBanner tone="impact">离线缓存 · 当前显示最近一次成功同步的行动结果与用户快照。</WarningBanner>
+        <WarningBanner tone="impact">离线缓存 · 可以查看快照和编辑纠正草稿，恢复服务后才能提交。</WarningBanner>
       )}
       {state.apiError && !snapshot.id && (
-        <WarningBanner tone="risk">服务端快照不可用。本地演示数据不作为个人系统事实。</WarningBanner>
+        <WarningBanner tone="risk">服务端快照不可用。当前没有可作为系统事实的本地结果。</WarningBanner>
       )}
 
       <GlassPanel
@@ -127,12 +149,18 @@ export function SystemPage({ onNavigate }: PageProps) {
         </div>
       </GlassPanel>
 
-      {notice && <WarningBanner tone="gold">{notice}</WarningBanner>}
+      {correctionResult && (
+        <CorrectionResultNotice
+          result={correctionResult}
+          source={state.correctionSource}
+          isCurrentSnapshot={correctionResultIsCurrent}
+        />
+      )}
 
-      {state.snapshotDiff && state.systemRevisionSource !== 'mock' && (
+      {state.snapshotDiff && ['api', 'cache'].includes(changeSource) && (
         <GlassPanel
           variant="primary"
-          eyebrow={state.systemRevisionSource === 'api' ? 'SYSTEM CHANGE · SERVER RESULT' : 'SYSTEM CHANGE · OFFLINE CACHE'}
+          eyebrow={changeSource === 'api' ? 'SYSTEM CHANGE · SERVER RESULT' : 'SYSTEM CHANGE · OFFLINE CACHE'}
           title={`本次系统变化 · V${state.snapshotDiff.fromVersion ?? '?'} → V${state.snapshotDiff.toVersion}`}
         >
           <SnapshotDiffPanel diff={state.snapshotDiff} />
@@ -141,7 +169,48 @@ export function SystemPage({ onNavigate }: PageProps) {
 
       {showProfile && (
         <section className="system-snapshot-grid" aria-label="个人系统档案">
-          {visibleSections.map((section) => <SystemSnapshotCard key={section.id} section={section} onAction={handleAction} />)}
+          {visibleSections.map((section) => <SystemSnapshotCard key={section.id} section={section} />)}
+        </section>
+      )}
+
+      {showProfile && correctionTargets.length > 0 && (
+        <section className="correction-workspace" aria-label="纠正系统判断">
+          <header className="correction-workspace-heading">
+            <div>
+              <div className="eyebrow">USER CORRECTION</div>
+              <h2>纠正系统判断</h2>
+            </div>
+            <Tag tone="muted">{correctionTargets.length} ITEMS</Tag>
+          </header>
+          <div className="correction-target-grid">
+            {correctionTargets.map((target) => (
+              <CorrectionTargetCard
+                key={target.key}
+                target={target}
+                isActive={state.activeCorrectionTarget?.key === target.key}
+                onSelect={selectCorrectionTarget}
+              />
+            ))}
+          </div>
+
+          {state.activeCorrectionTarget && (
+            <SystemCorrectionPanel
+              target={state.activeCorrectionTarget}
+              correctionType={state.correctionType}
+              draft={state.correctionDraft}
+              reason={state.correctionReason}
+              discontinueConfirmed={state.correctionDiscontinueConfirmed}
+              isSubmitting={state.correctionRequestStatus === 'loading'}
+              isOffline={correctionIsOffline}
+              error={state.correctionApiError}
+              onTypeChange={(correctionType) => dispatch({ type: 'UPDATE_CORRECTION_TYPE', correctionType })}
+              onDraftChange={(value) => dispatch({ type: 'UPDATE_CORRECTION_DRAFT', value })}
+              onReasonChange={(value) => dispatch({ type: 'UPDATE_CORRECTION_REASON', value })}
+              onDiscontinueConfirmation={(confirmed) => dispatch({ type: 'UPDATE_CORRECTION_CONFIRMATION', confirmed })}
+              onSubmit={() => void submitCurrentCorrection()}
+              onCancel={() => dispatch({ type: 'CLOSE_CORRECTION_TARGET' })}
+            />
+          )}
         </section>
       )}
 

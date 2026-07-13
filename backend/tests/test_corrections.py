@@ -28,6 +28,43 @@ def correction_payload(
     }
 
 
+def create_confirmed_hypothesis(client: TestClient, key_prefix: str) -> dict:
+    thread = client.post(
+        "/api/threads",
+        headers=idempotency(f"{key_prefix}-thread"),
+        json={"title": "假设纠正测试"},
+    ).json()["data"]
+    started = client.post(
+        "/api/understanding/analyze",
+        headers=idempotency(f"{key_prefix}-start"),
+        json={"thread_id": thread["id"], "expression_mode": "ask"},
+    ).json()["data"]
+    session_id = started["session"]["id"]
+    answers = [
+        ("desired_result", "验证用户能够停止系统继续使用某项假设。"),
+        ("current_foundation", "后端已有理解与快照能力。"),
+        ("real_constraints", "本轮只验证后端契约。"),
+    ]
+    for index, (question_id, answer_text) in enumerate(answers):
+        response = client.post(
+            "/api/understanding/analyze",
+            headers=idempotency(f"{key_prefix}-answer-{index}"),
+            json={
+                "thread_id": thread["id"],
+                "session_id": session_id,
+                "answer": {"question_id": question_id, "answer_text": answer_text},
+            },
+        )
+        assert response.status_code == 200
+    confirmed = client.post(
+        f"/api/understanding/{session_id}/confirm",
+        headers=idempotency(f"{key_prefix}-confirm"),
+        json={"assessment": "accurate"},
+    )
+    assert confirmed.status_code == 200
+    return confirmed.json()["data"]["snapshot"]["hypotheses"][0]
+
+
 @pytest.mark.parametrize(
     ("correction_type", "snapshot_updated"),
     [
@@ -147,40 +184,7 @@ def test_correction_rejects_unknown_target(client: TestClient) -> None:
 
 
 def test_discontinued_hypothesis_is_removed_from_snapshot(client: TestClient) -> None:
-    thread = client.post(
-        "/api/threads",
-        headers=idempotency("correction-hypothesis-thread"),
-        json={"title": "假设纠正测试"},
-    ).json()["data"]
-    started = client.post(
-        "/api/understanding/analyze",
-        headers=idempotency("correction-hypothesis-start"),
-        json={"thread_id": thread["id"], "expression_mode": "ask"},
-    ).json()["data"]
-    session_id = started["session"]["id"]
-    answers = [
-        ("desired_result", "验证用户能够停止系统继续使用某项假设。"),
-        ("current_foundation", "后端已有理解与快照能力。"),
-        ("real_constraints", "本轮只验证后端契约。"),
-    ]
-    for index, (question_id, answer_text) in enumerate(answers):
-        response = client.post(
-            "/api/understanding/analyze",
-            headers=idempotency(f"correction-hypothesis-answer-{index}"),
-            json={
-                "thread_id": thread["id"],
-                "session_id": session_id,
-                "answer": {"question_id": question_id, "answer_text": answer_text},
-            },
-        )
-        assert response.status_code == 200
-    confirmed = client.post(
-        f"/api/understanding/{session_id}/confirm",
-        headers=idempotency("correction-hypothesis-confirm"),
-        json={"assessment": "accurate"},
-    )
-    assert confirmed.status_code == 200
-    hypothesis_data = confirmed.json()["data"]["snapshot"]["hypotheses"][0]
+    hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis")
 
     correction = client.post(
         "/api/users/demo-user/corrections",
@@ -203,6 +207,61 @@ def test_discontinued_hypothesis_is_removed_from_snapshot(client: TestClient) ->
         assert hypothesis is not None
         assert hypothesis.user_attitude == "rejected"
         assert hypothesis.status == "denied"
+
+
+def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinued(
+    client: TestClient,
+) -> None:
+    hypothesis_data = create_confirmed_hypothesis(client, "correction-hypothesis-replacement")
+    corrected_content = "用户在明确首个交付物后更容易进入真实开发。"
+
+    partial = client.post(
+        "/api/users/demo-user/corrections",
+        headers=idempotency("correction-hypothesis-replacement-partial"),
+        json={
+            "target_type": "hypothesis",
+            "target_id": hypothesis_data["id"],
+            "correction_type": "partial",
+            "original_value": hypothesis_data["content"],
+            "corrected_value": corrected_content,
+            "reason": "原判断只有部分准确。",
+        },
+    )
+
+    assert partial.status_code == 201
+    replacement_data = partial.json()["data"]["snapshot"]["hypotheses"][0]
+    assert replacement_data["id"] != hypothesis_data["id"]
+    assert replacement_data["content"] == corrected_content
+    assert len(replacement_data["id"]) <= 36
+    with SessionLocal() as session:
+        original = session.get(Hypothesis, hypothesis_data["id"])
+        replacement = session.get(Hypothesis, replacement_data["id"])
+        assert original is not None
+        assert original.status == "expired"
+        assert replacement is not None
+        assert replacement.user_attitude == "accepted"
+
+    discontinued = client.post(
+        "/api/users/demo-user/corrections",
+        headers=idempotency("correction-hypothesis-replacement-discontinue"),
+        json={
+            "target_type": "hypothesis",
+            "target_id": replacement_data["id"],
+            "correction_type": "discontinue",
+            "original_value": corrected_content,
+            "corrected_value": corrected_content,
+            "reason": "用户要求停止使用修正后的判断。",
+        },
+    )
+
+    assert discontinued.status_code == 201
+    result = discontinued.json()["data"]
+    assert all(item.get("id") != replacement_data["id"] for item in result["snapshot"]["hypotheses"])
+    with SessionLocal() as session:
+        replacement = session.get(Hypothesis, replacement_data["id"])
+        assert replacement is not None
+        assert replacement.user_attitude == "rejected"
+        assert replacement.status == "denied"
 
 
 def test_openapi_exposes_thread_and_correction_idempotency(client: TestClient) -> None:

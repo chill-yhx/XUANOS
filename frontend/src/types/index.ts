@@ -24,13 +24,26 @@ export type QuestionId = 'desired_result' | 'current_foundation' | 'real_constra
 
 export type UnderstandingAssessment = 'accurate' | 'partial' | 'inaccurate' | 'supplement'
 
-export type DataSource = 'api' | 'cache' | 'mock'
+export type DataSource = 'api' | 'cache' | 'mock' | 'none'
 
 export type RequestStatus = 'idle' | 'loading' | 'success' | 'error'
 
 export type UnderstandingStatus = 'idle' | 'collecting' | 'reviewing' | 'confirmed'
 
 export type ActionResultStatus = 'completed' | 'partially_completed' | 'not_completed' | 'abandoned'
+
+export type CorrectionType = 'accurate' | 'partial' | 'inaccurate' | 'changed' | 'discontinue'
+
+export type CorrectionTargetType =
+  | 'understanding'
+  | 'goal'
+  | 'constraint'
+  | 'plan'
+  | 'snapshot'
+  | 'hypothesis'
+  | 'system_section'
+
+export type CorrectionTargetArea = 'vector' | 'action' | 'boundary' | 'pattern' | 'hypothesis' | 'state'
 
 export type ActionObstacleCode =
   | 'low_energy'
@@ -49,23 +62,11 @@ export interface ApiErrorState {
   requestId: string | null
 }
 
-export interface ThreadSummary {
-  title: string
-  status: string
-  phase: string
-  nextReview: string
-}
-
 export interface PriorityGroup {
   title: string
   label: string
   tone: TagTone
   items: string[]
-}
-
-export interface TimeBlock {
-  label: string
-  task: string
 }
 
 export interface SystemSection {
@@ -148,6 +149,8 @@ export interface AnswerMetadata {
 
 export interface CorrectionRecord {
   id: string
+  userId?: string
+  threadId?: string | null
   target: string
   targetType?: string
   targetId?: string | null
@@ -341,6 +344,25 @@ export interface SnapshotDiff {
   changes: SnapshotChange[]
 }
 
+export interface CorrectionTarget {
+  key: string
+  targetType: CorrectionTargetType
+  targetId: string
+  area: CorrectionTargetArea
+  label: string
+  originalValue: string
+  snapshotId: string
+  snapshotVersion: number
+}
+
+export interface UserCorrectionResult {
+  correction: CorrectionRecord
+  snapshot: SystemSnapshot
+  snapshotUpdated: boolean
+  previousSnapshot: SystemSnapshot
+  snapshotDiff: SnapshotDiff
+}
+
 export interface ActionSubmissionResult {
   actionResult: ActionResult
   systemRevision: SystemRevision
@@ -445,5 +467,16 @@ export interface DemoSessionState {
   systemRevisionSource: DataSource
   systemRevisionAt: string | null
   systemRevision: SystemRevision | null
+  activeCorrectionTarget: CorrectionTarget | null
+  correctionType: CorrectionType | null
+  correctionDraft: string
+  correctionReason: string
+  correctionDiscontinueConfirmed: boolean
+  correctionRequestStatus: RequestStatus
+  correctionApiError: ApiErrorState | null
+  latestCorrectionId: string | null
+  latestCorrectionAt: string | null
+  latestCorrectionResult: UserCorrectionResult | null
+  correctionSource: DataSource
   systemSnapshot: SystemSnapshot
 }

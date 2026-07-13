@@ -65,6 +65,26 @@ export function toApiErrorState(error: unknown): ApiErrorState {
   }
 }
 
+export function toCorrectionApiErrorState(error: unknown): ApiErrorState {
+  const state = toApiErrorState(error)
+  if (state.code === 'NETWORK_ERROR') {
+    return { ...state, message: '无法连接 XUANOS 服务，纠正草稿已保留。' }
+  }
+  if (state.code === 'TIMEOUT') {
+    return { ...state, message: '纠正请求超时，草稿和待重试请求均已保留。' }
+  }
+  if (state.code === 'RESOURCE_NOT_FOUND') {
+    return { ...state, message: '当前系统条目已经变化，请刷新后重新纠正。' }
+  }
+  if (state.code === 'VALIDATION_ERROR') {
+    return { ...state, message: '纠正内容未通过校验，请检查后重试。' }
+  }
+  if (state.code === 'DUPLICATE_SUBMISSION') {
+    return { ...state, message: '纠正请求内容已经变化，请重新确认后提交。' }
+  }
+  return { ...state, message: state.message || '纠正尚未保存，请重试。' }
+}
+
 function publicApiError(error: ApiError): { code: string; message: string } {
   if (error.code === 'API_UNREACHABLE') {
     return {

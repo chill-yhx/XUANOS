@@ -1,12 +1,10 @@
-import {
-  createInitialSession,
-  initialFeedback,
-} from '../data/interactionMock'
 import { understandingQuestions } from '../data/understandingQuestions'
 import type {
   ActiveThread,
   ActionSubmissionResult,
   ApiErrorState,
+  CorrectionTarget,
+  CorrectionType,
   DemoSessionState,
   ExpressionMode,
   FeedbackPayload,
@@ -15,13 +13,14 @@ import type {
   PlanModificationDraft,
   PlanReviseResult,
   PlanVersion,
-  SystemSection,
   SystemSnapshot,
   ThreadAggregateState,
   UnderstandingAnalyzeResult,
   UnderstandingAssessment,
   UnderstandingConfirmResult,
+  UserCorrectionResult,
 } from '../types'
+import { createInitialSession, initialFeedback } from './initialState'
 
 export type InteractionAction =
   | { type: 'API_REQUEST_STARTED' }
@@ -56,7 +55,16 @@ export type InteractionAction =
   | { type: 'ACTION_RESULT_SUCCEEDED'; result: ActionSubmissionResult }
   | { type: 'ACTION_RESULT_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'ACTION_RESULT_READBACK_FAILED'; error: ApiErrorState }
-  | { type: 'ADD_SYSTEM_CORRECTION'; action: string; section: SystemSection }
+  | { type: 'OPEN_CORRECTION_TARGET'; target: CorrectionTarget }
+  | { type: 'CLOSE_CORRECTION_TARGET' }
+  | { type: 'UPDATE_CORRECTION_TYPE'; correctionType: CorrectionType | null }
+  | { type: 'UPDATE_CORRECTION_DRAFT'; value: string }
+  | { type: 'UPDATE_CORRECTION_REASON'; value: string }
+  | { type: 'UPDATE_CORRECTION_CONFIRMATION'; confirmed: boolean }
+  | { type: 'CORRECTION_REQUEST_STARTED' }
+  | { type: 'CORRECTION_REQUEST_SUCCEEDED'; result: UserCorrectionResult }
+  | { type: 'CORRECTION_REQUEST_FAILED'; error: ApiErrorState }
+  | { type: 'CORRECTION_READBACK_FAILED'; error: ApiErrorState }
   | { type: 'RESET_DEMO_DATA' }
 
 function withThread(state: DemoSessionState, status: string, phase = state.uiThreadPhase): DemoSessionState {
@@ -104,11 +112,12 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         isLoading: false,
         apiError: action.error,
         isOfflineCache: Boolean(state.serverSnapshot || state.activeThread),
-        dataSource: state.serverSnapshot || state.activeThread ? 'cache' : 'mock',
+        dataSource: state.serverSnapshot || state.activeThread ? 'cache' : state.dataSource,
         understandingSource: state.serverUnderstanding ? 'cache' : state.understandingSource,
-        planSource: state.currentPlan && state.planSource !== 'mock' ? 'cache' : state.planSource,
+        planSource: state.currentPlan ? 'cache' : state.planSource,
         actionResultSource: state.latestActionResult ? 'cache' : state.actionResultSource,
         systemRevisionSource: state.systemRevision ? 'cache' : state.systemRevisionSource,
+        correctionSource: state.latestCorrectionResult ? 'cache' : state.correctionSource,
       }
 
     case 'API_SYNC_COMPLETED':
@@ -163,7 +172,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         activePlanId: null,
         planRequestStatus: 'idle',
         planApiError: null,
-        planSource: 'mock',
+        planSource: 'none',
         lastSuccessfulPlanAt: null,
         lastViewedPlanId: null,
         planModificationDraft: {
@@ -178,14 +187,25 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         actionResultSubmittedAt: null,
         actionResultRequestStatus: 'idle',
         actionResultApiError: null,
-        actionResultSource: 'mock',
+        actionResultSource: 'none',
         latestSnapshot: null,
         previousSnapshot: null,
         snapshotDiff: null,
         latestActionHypothesis: null,
         systemRevision: null,
-        systemRevisionSource: 'mock',
+        systemRevisionSource: 'none',
         systemRevisionAt: null,
+        activeCorrectionTarget: null,
+        correctionType: null,
+        correctionDraft: '',
+        correctionReason: '',
+        correctionDiscontinueConfirmed: false,
+        correctionRequestStatus: 'idle',
+        correctionApiError: null,
+        latestCorrectionId: null,
+        latestCorrectionAt: null,
+        latestCorrectionResult: null,
+        correctionSource: 'none',
         isLoading: false,
         apiError: null,
         isOfflineCache: false,
@@ -196,7 +216,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
       const aggregate = action.aggregate
       const sameThread = state.activeThreadId === aggregate.thread.id
       const useServerWorkflow = aggregate.serverStep !== 'idle'
-      const preserveLocalMock = sameThread && !useServerWorkflow
+      const preserveLocalDraft = sameThread && !useServerWorkflow
       const activeSession = aggregate.activeUnderstandingSession
       const serverUnderstanding = useServerWorkflow ? aggregate.understanding : state.serverUnderstanding
       const preserveAnswerDraft = sameThread
@@ -221,6 +241,12 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         && aggregate.currentPlan?.status === 'accepted'
         && state.actionFeedback.planId === aggregate.currentPlan.id,
       )
+      const sameCorrectionSnapshot = Boolean(
+        state.latestCorrectionResult
+        && state.latestCorrectionResult.snapshot.id === aggregate.snapshot.id
+        && state.latestCorrectionResult.snapshot.version === aggregate.snapshot.version,
+      )
+      const preserveSnapshotComparison = sameActionResult || sameCorrectionSnapshot
       return {
         ...state,
         activeThread: aggregate.thread,
@@ -229,9 +255,9 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         serverStep: aggregate.serverStep,
         currentStep: preserveFeedbackDraft
           ? 'action_pending'
-          : preserveLocalMock ? state.currentStep : aggregate.serverStep,
-        uiThreadStatus: preserveLocalMock ? state.uiThreadStatus : aggregate.thread.status,
-        uiThreadPhase: preserveLocalMock ? state.uiThreadPhase : aggregate.thread.phase,
+          : preserveLocalDraft ? state.currentStep : aggregate.serverStep,
+        uiThreadStatus: preserveLocalDraft ? state.uiThreadStatus : aggregate.thread.status,
+        uiThreadPhase: preserveLocalDraft ? state.uiThreadPhase : aggregate.thread.phase,
         activeUnderstandingSession: useServerWorkflow
           ? activeSession
           : state.activeUnderstandingSession,
@@ -292,11 +318,14 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         actionResultApiError: null,
         actionResultSource: latestActionResult ? 'api' : state.actionResultSource,
         latestSnapshot: aggregate.snapshot,
-        previousSnapshot: sameActionResult ? state.previousSnapshot : null,
-        snapshotDiff: sameActionResult ? state.snapshotDiff : null,
+        previousSnapshot: preserveSnapshotComparison ? state.previousSnapshot : null,
+        snapshotDiff: preserveSnapshotComparison ? state.snapshotDiff : null,
         latestActionHypothesis: sameActionResult ? state.latestActionHypothesis : null,
         systemRevisionSource: aggregate.systemRevision ? 'api' : state.systemRevisionSource,
         systemRevisionAt: latestActionResult?.submittedAt ?? state.systemRevisionAt,
+        correctionRequestStatus: sameCorrectionSnapshot ? 'success' : state.correctionRequestStatus,
+        correctionApiError: null,
+        correctionSource: sameCorrectionSnapshot ? 'api' : state.correctionSource,
         serverSnapshot: aggregate.snapshot,
         snapshotId: aggregate.snapshot.id,
         snapshotVersion: aggregate.snapshot.version,
@@ -309,16 +338,23 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
 
     case 'SNAPSHOT_LOADED':
       if (state.serverSnapshot && action.snapshot.version < state.serverSnapshot.version) return state
-      return {
-        ...state,
-        serverSnapshot: action.snapshot,
-        snapshotId: action.snapshot.id,
-        snapshotVersion: action.snapshot.version,
-        latestSnapshot: action.snapshot,
-        systemSnapshot: action.snapshot,
-        apiError: null,
-        isOfflineCache: false,
-        dataSource: 'api',
+      {
+        const comparisonIsCurrent = state.snapshotDiff?.toSnapshotId === action.snapshot.id
+        return {
+          ...state,
+          serverSnapshot: action.snapshot,
+          snapshotId: action.snapshot.id,
+          snapshotVersion: action.snapshot.version,
+          latestSnapshot: action.snapshot,
+          previousSnapshot: comparisonIsCurrent ? state.previousSnapshot : null,
+          snapshotDiff: comparisonIsCurrent ? state.snapshotDiff : null,
+          systemSnapshot: action.snapshot,
+          correctionRequestStatus: state.activeCorrectionTarget ? 'idle' : state.correctionRequestStatus,
+          correctionApiError: null,
+          apiError: null,
+          isOfflineCache: false,
+          dataSource: 'api',
+        }
       }
 
     case 'START_CALIBRATION':
@@ -725,27 +761,98 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         actionResultApiError: action.error,
       }
 
-    case 'ADD_SYSTEM_CORRECTION': {
-      const correction = `${action.section.title}：${action.action}`
+    case 'OPEN_CORRECTION_TARGET':
       return {
         ...state,
-        corrections: [
-          ...state.corrections,
-          {
-            id: `system-correction-${Date.now()}`,
-            target: action.section.id,
-            assessment: 'system_snapshot',
-            previousValue: action.section.entries.join('；'),
-            userValue: action.action,
-            createdAt: new Date().toISOString(),
-          },
-        ],
-        systemSnapshot: {
-          ...state.systemSnapshot,
-          userCorrections: [correction, ...state.systemSnapshot.userCorrections].slice(0, 4),
-        },
+        activeCorrectionTarget: action.target,
+        correctionType: null,
+        correctionDraft: '',
+        correctionReason: '',
+        correctionDiscontinueConfirmed: false,
+        correctionRequestStatus: 'idle',
+        correctionApiError: null,
+      }
+
+    case 'CLOSE_CORRECTION_TARGET':
+      if (state.correctionRequestStatus === 'loading') return state
+      return {
+        ...state,
+        activeCorrectionTarget: null,
+        correctionType: null,
+        correctionDraft: '',
+        correctionReason: '',
+        correctionDiscontinueConfirmed: false,
+        correctionApiError: null,
+      }
+
+    case 'UPDATE_CORRECTION_TYPE':
+      return {
+        ...state,
+        correctionType: action.correctionType,
+        correctionDraft: action.correctionType === 'accurate' ? '' : state.correctionDraft,
+        correctionDiscontinueConfirmed: false,
+        correctionApiError: null,
+      }
+
+    case 'UPDATE_CORRECTION_DRAFT':
+      return { ...state, correctionDraft: action.value }
+
+    case 'UPDATE_CORRECTION_REASON':
+      return { ...state, correctionReason: action.value }
+
+    case 'UPDATE_CORRECTION_CONFIRMATION':
+      return { ...state, correctionDiscontinueConfirmed: action.confirmed }
+
+    case 'CORRECTION_REQUEST_STARTED':
+      return {
+        ...state,
+        correctionRequestStatus: 'loading',
+        correctionApiError: null,
+      }
+
+    case 'CORRECTION_REQUEST_SUCCEEDED': {
+      const { result } = action
+      const correction = result.correction
+      return {
+        ...state,
+        activeCorrectionTarget: null,
+        correctionType: null,
+        correctionDraft: '',
+        correctionReason: '',
+        correctionDiscontinueConfirmed: false,
+        correctionRequestStatus: 'success',
+        correctionApiError: null,
+        latestCorrectionId: correction.id,
+        latestCorrectionAt: correction.createdAt,
+        latestCorrectionResult: result,
+        correctionSource: 'api',
+        corrections: [...state.corrections.filter((item) => item.id !== correction.id), correction],
+        previousSnapshot: result.previousSnapshot,
+        latestSnapshot: result.snapshot,
+        snapshotDiff: result.snapshotDiff,
+        serverSnapshot: result.snapshot,
+        snapshotId: result.snapshot.id,
+        snapshotVersion: result.snapshot.version,
+        systemSnapshot: result.snapshot,
+        apiError: null,
+        isOfflineCache: false,
+        dataSource: 'api',
       }
     }
+
+    case 'CORRECTION_REQUEST_FAILED': {
+      const offline = ['NETWORK_ERROR', 'TIMEOUT'].includes(action.error.code)
+      return {
+        ...state,
+        correctionRequestStatus: 'error',
+        correctionApiError: action.error,
+        correctionSource: offline && state.latestCorrectionResult ? 'cache' : state.correctionSource,
+        isOfflineCache: offline && Boolean(state.serverSnapshot || state.activeThread),
+      }
+    }
+
+    case 'CORRECTION_READBACK_FAILED':
+      return { ...state, apiError: action.error }
 
     case 'RESET_DEMO_DATA':
       return createInitialSession()
