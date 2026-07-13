@@ -9,9 +9,10 @@ const modes: Array<{ id: ExpressionMode; title: string; copy: string }> = [
 interface ModeSelectorProps {
   value: ExpressionMode | null
   onChange: (mode: ExpressionMode) => void
+  disabled?: boolean
 }
 
-export function ModeSelector({ value, onChange }: ModeSelectorProps) {
+export function ModeSelector({ value, onChange, disabled = false }: ModeSelectorProps) {
   return (
     <div className="mode-selector">
       {modes.map((mode, index) => (
@@ -20,6 +21,7 @@ export function ModeSelector({ value, onChange }: ModeSelectorProps) {
           className={`mode-option ${value === mode.id ? 'is-active' : ''}`}
           type="button"
           onClick={() => onChange(mode.id)}
+          disabled={disabled}
           aria-label={`${mode.title}：${mode.copy}`}
         >
           <span className="mode-index">0{index + 1}</span>

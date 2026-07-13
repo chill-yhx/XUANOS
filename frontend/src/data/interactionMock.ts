@@ -9,24 +9,6 @@ import type {
   UnderstandingSummary,
 } from '../types'
 
-export const interactionQuestions: Array<{ id: QuestionId; prompt: string; hint: string }> = [
-  {
-    id: 'desired_result',
-    prompt: '你最终想完成的具体结果是什么？',
-    hint: '描述一个可以判断是否完成的结果。',
-  },
-  {
-    id: 'current_foundation',
-    prompt: '你当前已经具备哪些基础？',
-    hint: '写下已有文档、能力、资源或已经完成的部分。',
-  },
-  {
-    id: 'real_constraints',
-    prompt: '现实中有哪些时间、资源或安排限制？',
-    hint: '只写真正会影响执行的边界。',
-  },
-]
-
 export const initialFeedback: FeedbackPayload = {
   started: true,
   completed: false,
@@ -57,13 +39,26 @@ export function createInitialSession(): DemoSessionState {
     uiThreadStatus: '等待校准',
     uiThreadPhase: '视觉系统确认',
     activeUnderstandingSession: null,
+    understandingSessionId: null,
+    understandingStatus: 'idle',
+    understandingConfirmedAt: null,
+    serverUnderstanding: null,
+    understandingRequestStatus: 'idle',
+    understandingApiError: null,
+    understandingSource: 'mock',
+    lastSuccessfulUnderstandingAt: null,
     answerMeta: {},
     latestActionResult: null,
     serverSnapshot: null,
     expressionMode: null,
     userInput: '',
+    currentAnswerDraft: '',
+    understandingAssessmentDraft: null,
+    understandingCorrectionDraft: '',
     answers: {},
+    submittedAnswers: {},
     currentQuestionIndex: 0,
+    currentQuestion: null,
     understanding: null,
     corrections: [],
     currentPlan: null,

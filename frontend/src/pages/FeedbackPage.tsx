@@ -37,11 +37,13 @@ export function FeedbackPage({ onNavigate }: PageProps) {
     <section className="page">
       <header className="page-heading">
         <div>
-          <div className="eyebrow">ACTION EXECUTION</div>
+          <div className="eyebrow">ACTION EXECUTION · MOCK</div>
           <h1>行动反馈</h1>
         </div>
         <p className="page-heading-copy">记录真实结果。系统根据行动修正，而不是根据想象。</p>
       </header>
+
+      <WarningBanner tone="gold">当前行动反馈与系统修正仍为前端 Mock，尚未提交后端。</WarningBanner>
 
       <div className="feedback-layout">
         <GlassPanel variant="secondary" eyebrow="RESULT INPUT" title={submitted ? '反馈已提交' : '记录真实结果'}>

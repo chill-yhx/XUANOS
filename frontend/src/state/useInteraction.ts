@@ -1,5 +1,10 @@
 import { createContext, useContext, type Dispatch } from 'react'
-import type { DemoSessionState, PageId } from '../types'
+import type {
+  DemoSessionState,
+  ExpressionMode,
+  PageId,
+  UnderstandingAssessment,
+} from '../types'
 import type { InteractionAction } from './interactionReducer'
 
 export interface InteractionContextValue {
@@ -8,6 +13,10 @@ export interface InteractionContextValue {
   resetDemo: () => void
   startCalibration: () => Promise<boolean>
   refreshSnapshot: () => Promise<void>
+  selectExpressionMode: (mode: ExpressionMode) => Promise<boolean>
+  submitInitialInput: () => Promise<boolean>
+  submitUnderstandingAnswer: () => Promise<boolean>
+  confirmUnderstanding: (assessment: UnderstandingAssessment, correction?: string) => Promise<boolean>
   continuePage: PageId
 }
 

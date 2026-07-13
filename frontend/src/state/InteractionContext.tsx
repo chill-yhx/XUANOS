@@ -2,7 +2,17 @@ import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'reac
 import { toApiErrorState } from '../api/apiErrors'
 import { getCurrentSnapshot } from '../services/snapshotService'
 import { createThread, getThread, listThreads } from '../services/threadService'
-import type { InteractionStep, PageId } from '../types'
+import {
+  analyzeUnderstanding,
+  confirmUnderstanding as confirmUnderstandingOnServer,
+} from '../services/understandingService'
+import type {
+  ApiErrorState,
+  ExpressionMode,
+  InteractionStep,
+  PageId,
+  UnderstandingAssessment,
+} from '../types'
 import { clearIntegrationCache, restoreIntegrationState, writeIntegrationCache } from './integrationCache'
 import { interactionReducer } from './interactionReducer'
 import { InteractionContext } from './useInteraction'
@@ -24,6 +34,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const hydratedRef = useRef(false)
   const createThreadRequestRef = useRef<Promise<boolean> | null>(null)
   const snapshotRequestRef = useRef<Promise<void> | null>(null)
+  const understandingRequestRef = useRef<Promise<boolean> | null>(null)
 
   useEffect(() => {
     stateRef.current = state
@@ -119,6 +130,126 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const failUnderstandingGuard = useCallback((message: string) => {
+    const error: ApiErrorState = {
+      code: 'INVALID_FLOW_STATE',
+      message,
+      status: null,
+      requestId: null,
+    }
+    dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error })
+    return false
+  }, [])
+
+  const runUnderstandingAnalyze = useCallback(
+    async (input: Parameters<typeof analyzeUnderstanding>[0]) => {
+      if (understandingRequestRef.current) return understandingRequestRef.current
+      const request = (async () => {
+        dispatch({ type: 'UNDERSTANDING_REQUEST_STARTED' })
+        try {
+          const result = await analyzeUnderstanding(input)
+          dispatch({ type: 'UNDERSTANDING_ANALYZE_SUCCEEDED', result })
+          return true
+        } catch (error) {
+          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error) })
+          return false
+        }
+      })()
+      understandingRequestRef.current = request
+      try {
+        return await request
+      } finally {
+        if (understandingRequestRef.current === request) understandingRequestRef.current = null
+      }
+    },
+    [],
+  )
+
+  const selectExpressionMode = useCallback(
+    async (mode: ExpressionMode) => {
+      const current = stateRef.current
+      if (!current.activeThreadId) return failUnderstandingGuard('请先创建任务线程，再开始理解。')
+      if (current.understandingRequestStatus === 'loading') return false
+      dispatch({ type: 'SELECT_EXPRESSION_MODE', mode })
+      if (mode !== 'ask') return true
+      return runUnderstandingAnalyze({
+        threadId: current.activeThreadId,
+        expressionMode: mode,
+      })
+    },
+    [failUnderstandingGuard, runUnderstandingAnalyze],
+  )
+
+  const submitInitialInput = useCallback(async () => {
+    const current = stateRef.current
+    if (!current.activeThreadId) return failUnderstandingGuard('请先创建任务线程，再提交目标。')
+    if (!current.expressionMode) return failUnderstandingGuard('请先选择表达方式。')
+    if (!current.userInput.trim()) return failUnderstandingGuard('请先写下目标或当前困境。')
+    if (current.understandingRequestStatus === 'loading') return false
+    return runUnderstandingAnalyze({
+      threadId: current.activeThreadId,
+      expressionMode: current.expressionMode,
+      userInput: current.userInput,
+    })
+  }, [failUnderstandingGuard, runUnderstandingAnalyze])
+
+  const submitUnderstandingAnswer = useCallback(async () => {
+    const current = stateRef.current
+    if (!current.activeThreadId) return failUnderstandingGuard('请先创建任务线程，再提交回答。')
+    if (!current.understandingSessionId) return failUnderstandingGuard('理解会话尚未建立，请重新选择表达方式。')
+    if (!current.currentQuestion) return failUnderstandingGuard('当前没有可提交的问题。')
+    if (!current.currentAnswerDraft.trim()) return failUnderstandingGuard('请先填写当前问题。')
+    if (current.understandingRequestStatus === 'loading') return false
+    return runUnderstandingAnalyze({
+      threadId: current.activeThreadId,
+      sessionId: current.understandingSessionId,
+      answer: {
+        questionId: current.currentQuestion.id,
+        answerText: current.currentAnswerDraft,
+      },
+    })
+  }, [failUnderstandingGuard, runUnderstandingAnalyze])
+
+  const confirmUnderstanding = useCallback(
+    async (assessment: UnderstandingAssessment, correction?: string) => {
+      const current = stateRef.current
+      const sessionId = current.understandingSessionId
+      if (!sessionId) {
+        return failUnderstandingGuard('理解会话尚未建立，无法确认。')
+      }
+      if (!current.serverUnderstanding || current.understandingSource === 'mock') {
+        return failUnderstandingGuard('当前不是可确认的服务端理解结果。')
+      }
+      if (assessment !== 'accurate' && !correction?.trim()) {
+        return failUnderstandingGuard('请先填写需要修正或补充的内容。')
+      }
+      if (current.understandingRequestStatus === 'loading') return false
+      if (understandingRequestRef.current) return understandingRequestRef.current
+
+      const request = (async () => {
+        dispatch({ type: 'UNDERSTANDING_REQUEST_STARTED' })
+        try {
+          const result = await confirmUnderstandingOnServer(sessionId, {
+            assessment,
+            correction,
+          })
+          dispatch({ type: 'UNDERSTANDING_CONFIRM_SUCCEEDED', result })
+          return true
+        } catch (error) {
+          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error) })
+          return false
+        }
+      })()
+      understandingRequestRef.current = request
+      try {
+        return await request
+      } finally {
+        if (understandingRequestRef.current === request) understandingRequestRef.current = null
+      }
+    },
+    [failUnderstandingGuard],
+  )
+
   const resetDemo = () => {
     clearIntegrationCache()
     dispatch({ type: 'RESET_DEMO_DATA' })
@@ -132,6 +263,10 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         resetDemo,
         startCalibration,
         refreshSnapshot,
+        selectExpressionMode,
+        submitInitialInput,
+        submitUnderstandingAnswer,
+        confirmUnderstanding,
         continuePage: pageForStep(state.currentStep),
       }}
     >

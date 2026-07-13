@@ -4434,3 +4434,36 @@
     display: none;
   }
 }
+
+.request-state,
+.understanding-source-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(236, 229, 211, 0.5);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.request-state {
+  margin-top: 18px;
+  letter-spacing: 0.08em;
+}
+
+.understanding-source-line {
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.mode-option:disabled,
+.short-input:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+@media (max-width: 520px) {
+  .understanding-source-line {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -26,6 +26,10 @@ export type UnderstandingAssessment = 'accurate' | 'partial' | 'inaccurate' | 's
 
 export type DataSource = 'api' | 'cache' | 'mock'
 
+export type RequestStatus = 'idle' | 'loading' | 'success' | 'error'
+
+export type UnderstandingStatus = 'idle' | 'collecting' | 'reviewing' | 'confirmed'
+
 export interface ApiErrorState {
   code: string
   message: string
@@ -80,19 +84,44 @@ export interface UnderstandingSummary {
   uncertain: string
 }
 
+export interface UnderstandingQuestion {
+  id: QuestionId
+  prompt: string
+  hint: string
+  index: number
+  total: number
+}
+
 export interface UnderstandingSession {
   id: string
   threadId: string
   userId: string
   previousSessionId: string | null
   expressionMode: ExpressionMode
-  status: string
+  status: UnderstandingStatus
   userInput: string | null
   currentQuestionIndex: number
   summaryVersion: number
   confirmedAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface UnderstandingAnalyzeResult {
+  session: UnderstandingSession
+  submittedAnswers: Partial<Record<QuestionId, string>>
+  answerMeta: Partial<Record<QuestionId, AnswerMetadata>>
+  nextQuestion: UnderstandingQuestion | null
+  understanding: UnderstandingSummary | null
+  currentStep: InteractionStep
+}
+
+export interface UnderstandingConfirmResult {
+  session: UnderstandingSession
+  understanding: UnderstandingSummary
+  correction: CorrectionRecord | null
+  snapshot: SystemSnapshot | null
+  currentStep: InteractionStep
 }
 
 export interface AnswerMetadata {
@@ -255,6 +284,7 @@ export interface ThreadAggregateState {
   answers: Partial<Record<QuestionId, string>>
   answerMeta: Partial<Record<QuestionId, AnswerMetadata>>
   currentQuestionIndex: number
+  currentQuestion: UnderstandingQuestion | null
   understanding: UnderstandingSummary | null
   corrections: CorrectionRecord[]
   currentPlan: PlanVersion | null
@@ -280,13 +310,26 @@ export interface DemoSessionState {
   uiThreadStatus: string
   uiThreadPhase: string
   activeUnderstandingSession: UnderstandingSession | null
+  understandingSessionId: string | null
+  understandingStatus: UnderstandingStatus
+  understandingConfirmedAt: string | null
+  serverUnderstanding: UnderstandingSummary | null
+  understandingRequestStatus: RequestStatus
+  understandingApiError: ApiErrorState | null
+  understandingSource: DataSource
+  lastSuccessfulUnderstandingAt: string | null
   answerMeta: Partial<Record<QuestionId, AnswerMetadata>>
   latestActionResult: ActionResult | null
   serverSnapshot: SystemSnapshot | null
   expressionMode: ExpressionMode | null
   userInput: string
+  currentAnswerDraft: string
+  understandingAssessmentDraft: UnderstandingAssessment | null
+  understandingCorrectionDraft: string
   answers: Partial<Record<QuestionId, string>>
+  submittedAnswers: Partial<Record<QuestionId, string>>
   currentQuestionIndex: number
+  currentQuestion: UnderstandingQuestion | null
   understanding: UnderstandingSummary | null
   corrections: CorrectionRecord[]
   currentPlan: PlanVersion | null

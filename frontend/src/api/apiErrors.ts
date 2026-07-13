@@ -56,10 +56,43 @@ export function normalizeApiError(error: unknown): ApiError {
 
 export function toApiErrorState(error: unknown): ApiErrorState {
   const normalized = normalizeApiError(error)
+  const publicError = publicApiError(normalized)
   return {
-    code: normalized.code,
-    message: normalized.message,
+    code: publicError.code,
+    message: publicError.message,
     status: normalized.status,
     requestId: normalized.requestId,
   }
+}
+
+function publicApiError(error: ApiError): { code: string; message: string } {
+  if (error.code === 'API_UNREACHABLE') {
+    return {
+      code: 'NETWORK_ERROR',
+      message: '无法连接 XUANOS 服务，请检查后端是否启动。',
+    }
+  }
+  if (error.code === 'API_TIMEOUT') {
+    return { code: 'TIMEOUT', message: '请求超时，本次内容仍已保留。' }
+  }
+  if (error.code === 'VALIDATION_ERROR') {
+    return { code: error.code, message: '提交内容未通过校验，请检查后重试。' }
+  }
+  if (error.code === 'INVALID_FLOW_STATE') {
+    return { code: error.code, message: '当前流程状态不允许执行此操作。' }
+  }
+  if (error.code === 'RESOURCE_NOT_FOUND') {
+    return { code: error.code, message: '当前任务或理解会话不存在。' }
+  }
+  if (error.code === 'DUPLICATE_SUBMISSION') {
+    return { code: error.code, message: '检测到重复提交，请确认内容后重试。' }
+  }
+  if (
+    error.code === 'INTERNAL_ERROR'
+    || error.code === 'INVALID_API_RESPONSE'
+    || error.status !== null && error.status >= 500
+  ) {
+    return { code: 'SERVER_ERROR', message: 'XUANOS 服务暂时无法处理本次请求。' }
+  }
+  return { code: error.code, message: error.message || '本次请求未完成，请重试。' }
 }

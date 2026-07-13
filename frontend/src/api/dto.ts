@@ -75,6 +75,48 @@ export interface UnderstandingSummaryDto {
   uncertain: string
 }
 
+export interface UnderstandingQuestionDto {
+  id: string
+  prompt: string
+  hint: string
+  index: number
+  total: number
+}
+
+export interface UnderstandingAnswerInputDto {
+  question_id: string
+  answer_text: string
+}
+
+export interface UnderstandingAnalyzeRequestDto {
+  thread_id: string
+  session_id?: string | null
+  expression_mode?: string | null
+  user_input?: string | null
+  answer?: UnderstandingAnswerInputDto | null
+}
+
+export interface UnderstandingAnalyzeResultDto {
+  session: UnderstandingSessionDto
+  current_answers: AnswerDto[]
+  next_question: UnderstandingQuestionDto | null
+  understanding: UnderstandingSummaryDto | null
+  current_step: string
+}
+
+export interface UnderstandingConfirmRequestDto {
+  assessment: string
+  correction: string | null
+}
+
+export interface UnderstandingConfirmResultDto {
+  session: UnderstandingSessionDto
+  understanding: UnderstandingSummaryDto
+  correction: CorrectionDto | null
+  snapshot: SnapshotDto | null
+  current_step: string
+}
+
 export interface CorrectionDto {
   id: string
   target_type: string

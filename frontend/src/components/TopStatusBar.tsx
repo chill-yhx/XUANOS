@@ -16,7 +16,11 @@ interface TopStatusBarProps {
 
 export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
   const { state } = useInteraction()
-  const statusLabel = state.isLoading ? 'SYSTEM SYNCING' : state.isOfflineCache ? 'OFFLINE CACHE' : 'SYSTEM ACTIVE'
+  const statusLabel = state.isLoading || state.understandingRequestStatus === 'loading'
+    ? 'SYSTEM SYNCING'
+    : state.isOfflineCache
+      ? 'OFFLINE CACHE'
+      : 'SYSTEM ACTIVE'
 
   return (
     <header className="top-status-bar">

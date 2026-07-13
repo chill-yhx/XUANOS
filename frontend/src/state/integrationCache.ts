@@ -1,4 +1,5 @@
 import { createInitialSession } from '../data/interactionMock'
+import { understandingQuestionAt } from '../data/understandingQuestions'
 import type { DemoSessionState, InteractionStep } from '../types'
 
 const STORAGE_KEY = 'xuanos:demo-user:integration-cache:v2'
@@ -27,17 +28,33 @@ interface IntegrationCache {
     DemoSessionState,
     'serverStep' | 'activeThread' | 'availableThreads' | 'serverSnapshot'
   >
+  understanding: Pick<
+    DemoSessionState,
+    | 'activeUnderstandingSession'
+    | 'understandingSessionId'
+    | 'understandingStatus'
+    | 'understandingConfirmedAt'
+    | 'serverUnderstanding'
+    | 'answerMeta'
+    | 'submittedAnswers'
+    | 'currentQuestionIndex'
+    | 'currentQuestion'
+    | 'corrections'
+    | 'lastSuccessfulUnderstandingAt'
+  >
+  drafts: Pick<
+    DemoSessionState,
+    | 'expressionMode'
+    | 'userInput'
+    | 'currentAnswerDraft'
+    | 'understandingAssessmentDraft'
+    | 'understandingCorrectionDraft'
+  >
   mock: Pick<
     DemoSessionState,
     | 'currentStep'
     | 'uiThreadStatus'
     | 'uiThreadPhase'
-    | 'expressionMode'
-    | 'userInput'
-    | 'answers'
-    | 'currentQuestionIndex'
-    | 'understanding'
-    | 'corrections'
     | 'currentPlan'
     | 'planVersions'
     | 'actionFeedback'
@@ -52,11 +69,22 @@ function isStep(value: unknown): value is InteractionStep {
 
 function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>): DemoSessionState {
   const server = parsed.server
+  const cachedUnderstanding = parsed.understanding
+  const drafts = parsed.drafts
   const mock = parsed.mock
   const serverSnapshot = server?.serverSnapshot ?? null
   const activeThread = server?.activeThread ?? null
   const currentStep = isStep(mock?.currentStep) ? mock.currentStep : fallback.currentStep
   const serverStep = isStep(server?.serverStep) ? server.serverStep : fallback.serverStep
+  const legacyMock = mock as Partial<DemoSessionState> | undefined
+  const submittedAnswers = cachedUnderstanding?.submittedAnswers ?? legacyMock?.answers ?? {}
+  const currentQuestionIndex = cachedUnderstanding?.currentQuestionIndex
+    ?? legacyMock?.currentQuestionIndex
+    ?? 0
+  const currentQuestion = cachedUnderstanding?.currentQuestion
+    ?? (currentStep === 'asking_question' ? understandingQuestionAt(currentQuestionIndex) : null)
+  const serverUnderstanding = cachedUnderstanding?.serverUnderstanding ?? legacyMock?.understanding ?? null
+  const hasUnderstandingCache = Boolean(cachedUnderstanding?.understandingSessionId || serverUnderstanding)
   return {
     ...fallback,
     ...mock,
@@ -73,8 +101,27 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     dataSource: activeThread || serverSnapshot ? 'cache' : 'mock',
     isLoading: false,
     apiError: null,
-    answers: mock?.answers ?? {},
-    corrections: mock?.corrections ?? [],
+    activeUnderstandingSession: cachedUnderstanding?.activeUnderstandingSession ?? null,
+    understandingSessionId: cachedUnderstanding?.understandingSessionId ?? null,
+    understandingStatus: cachedUnderstanding?.understandingStatus ?? 'idle',
+    understandingConfirmedAt: cachedUnderstanding?.understandingConfirmedAt ?? null,
+    serverUnderstanding,
+    understanding: serverUnderstanding,
+    understandingRequestStatus: 'idle',
+    understandingApiError: null,
+    understandingSource: hasUnderstandingCache ? 'cache' : 'mock',
+    lastSuccessfulUnderstandingAt: cachedUnderstanding?.lastSuccessfulUnderstandingAt ?? null,
+    expressionMode: drafts?.expressionMode ?? legacyMock?.expressionMode ?? null,
+    userInput: drafts?.userInput ?? legacyMock?.userInput ?? '',
+    currentAnswerDraft: drafts?.currentAnswerDraft ?? '',
+    understandingAssessmentDraft: drafts?.understandingAssessmentDraft ?? null,
+    understandingCorrectionDraft: drafts?.understandingCorrectionDraft ?? '',
+    answers: submittedAnswers,
+    submittedAnswers,
+    answerMeta: cachedUnderstanding?.answerMeta ?? {},
+    currentQuestionIndex,
+    currentQuestion,
+    corrections: cachedUnderstanding?.corrections ?? legacyMock?.corrections ?? [],
     planVersions: mock?.planVersions ?? [],
     actionFeedback: { ...fallback.actionFeedback, ...mock?.actionFeedback },
   }
@@ -91,8 +138,14 @@ function restoreLegacy(fallback: DemoSessionState): DemoSessionState {
       expressionMode: legacy.expressionMode ?? null,
       userInput: legacy.userInput ?? '',
       answers: legacy.answers ?? {},
+      submittedAnswers: legacy.answers ?? {},
       currentQuestionIndex: legacy.currentQuestionIndex ?? 0,
+      currentQuestion: legacy.currentStep === 'asking_question'
+        ? understandingQuestionAt(legacy.currentQuestionIndex ?? 0)
+        : null,
       understanding: legacy.understanding ?? null,
+      serverUnderstanding: null,
+      understandingSource: 'mock',
       corrections: legacy.corrections ?? [],
       currentPlan: legacy.currentPlan ?? null,
       planVersions: legacy.planVersions ?? [],
@@ -127,16 +180,30 @@ export function writeIntegrationCache(state: DemoSessionState) {
       availableThreads: state.availableThreads,
       serverSnapshot: state.serverSnapshot,
     },
+    understanding: {
+      activeUnderstandingSession: state.activeUnderstandingSession,
+      understandingSessionId: state.understandingSessionId,
+      understandingStatus: state.understandingStatus,
+      understandingConfirmedAt: state.understandingConfirmedAt,
+      serverUnderstanding: state.serverUnderstanding,
+      answerMeta: state.answerMeta,
+      submittedAnswers: state.submittedAnswers,
+      currentQuestionIndex: state.currentQuestionIndex,
+      currentQuestion: state.currentQuestion,
+      corrections: state.corrections,
+      lastSuccessfulUnderstandingAt: state.lastSuccessfulUnderstandingAt,
+    },
+    drafts: {
+      expressionMode: state.expressionMode,
+      userInput: state.userInput,
+      currentAnswerDraft: state.currentAnswerDraft,
+      understandingAssessmentDraft: state.understandingAssessmentDraft,
+      understandingCorrectionDraft: state.understandingCorrectionDraft,
+    },
     mock: {
       currentStep: state.currentStep,
       uiThreadStatus: state.uiThreadStatus,
       uiThreadPhase: state.uiThreadPhase,
-      expressionMode: state.expressionMode,
-      userInput: state.userInput,
-      answers: state.answers,
-      currentQuestionIndex: state.currentQuestionIndex,
-      understanding: state.understanding,
-      corrections: state.corrections,
       currentPlan: state.currentPlan,
       planVersions: state.planVersions,
       actionFeedback: state.actionFeedback,

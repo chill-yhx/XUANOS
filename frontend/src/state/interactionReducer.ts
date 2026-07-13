@@ -2,10 +2,9 @@ import {
   createInitialSession,
   createModifiedPlan,
   generatePlan,
-  generateUnderstanding,
-  interactionQuestions,
   reviseSystem,
 } from '../data/interactionMock'
+import { understandingQuestions } from '../data/understandingQuestions'
 import type {
   ActiveThread,
   ApiErrorState,
@@ -16,7 +15,9 @@ import type {
   SystemSection,
   SystemSnapshot,
   ThreadAggregateState,
+  UnderstandingAnalyzeResult,
   UnderstandingAssessment,
+  UnderstandingConfirmResult,
 } from '../types'
 
 export type InteractionAction =
@@ -30,11 +31,14 @@ export type InteractionAction =
   | { type: 'START_CALIBRATION' }
   | { type: 'SELECT_EXPRESSION_MODE'; mode: ExpressionMode }
   | { type: 'UPDATE_USER_INPUT'; value: string }
-  | { type: 'SUBMIT_USER_INPUT' }
-  | { type: 'ANSWER_QUESTION'; answer: string }
+  | { type: 'UPDATE_ANSWER_DRAFT'; value: string }
+  | { type: 'UPDATE_UNDERSTANDING_ASSESSMENT'; assessment: UnderstandingAssessment | null }
+  | { type: 'UPDATE_UNDERSTANDING_CORRECTION'; value: string }
+  | { type: 'UNDERSTANDING_REQUEST_STARTED' }
+  | { type: 'UNDERSTANDING_ANALYZE_SUCCEEDED'; result: UnderstandingAnalyzeResult }
+  | { type: 'UNDERSTANDING_CONFIRM_SUCCEEDED'; result: UnderstandingConfirmResult }
+  | { type: 'UNDERSTANDING_REQUEST_FAILED'; error: ApiErrorState }
   | { type: 'GO_TO_PREVIOUS_QUESTION' }
-  | { type: 'ADD_CORRECTION'; assessment: UnderstandingAssessment; value: string }
-  | { type: 'CONFIRM_UNDERSTANDING' }
   | { type: 'GENERATE_PLAN' }
   | { type: 'MODIFY_PLAN'; reason: PlanModificationReason; userChoice: string }
   | { type: 'ACCEPT_PLAN' }
@@ -58,6 +62,20 @@ function mergeThread(threads: ActiveThread[], thread: ActiveThread) {
   return [thread, ...threads.filter((item) => item.id !== thread.id)]
 }
 
+function updateThreadStep(
+  state: DemoSessionState,
+  step: DemoSessionState['serverStep'],
+  sessionId = state.understandingSessionId,
+) {
+  if (!state.activeThread) return { activeThread: null, availableThreads: state.availableThreads }
+  const activeThread = {
+    ...state.activeThread,
+    currentStep: step,
+    activeUnderstandingSessionId: sessionId,
+  }
+  return { activeThread, availableThreads: mergeThread(state.availableThreads, activeThread) }
+}
+
 export function interactionReducer(state: DemoSessionState, action: InteractionAction): DemoSessionState {
   switch (action.type) {
     case 'API_REQUEST_STARTED':
@@ -70,6 +88,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         apiError: action.error,
         isOfflineCache: Boolean(state.serverSnapshot || state.activeThread),
         dataSource: state.serverSnapshot || state.activeThread ? 'cache' : 'mock',
+        understandingSource: state.serverUnderstanding ? 'cache' : state.understandingSource,
       }
 
     case 'API_SYNC_COMPLETED':
@@ -98,6 +117,27 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         currentStep: 'expression_mode',
         uiThreadStatus: action.thread.status,
         uiThreadPhase: '选择表达方式',
+        activeUnderstandingSession: null,
+        understandingSessionId: null,
+        understandingStatus: 'idle',
+        understandingConfirmedAt: null,
+        serverUnderstanding: null,
+        understandingRequestStatus: 'idle',
+        understandingApiError: null,
+        understandingSource: 'api',
+        lastSuccessfulUnderstandingAt: null,
+        expressionMode: null,
+        userInput: '',
+        currentAnswerDraft: '',
+        understandingAssessmentDraft: null,
+        understandingCorrectionDraft: '',
+        answers: {},
+        submittedAnswers: {},
+        answerMeta: {},
+        currentQuestionIndex: 0,
+        currentQuestion: null,
+        understanding: null,
+        corrections: [],
         isLoading: false,
         apiError: null,
         isOfflineCache: false,
@@ -109,6 +149,10 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
       const sameThread = state.activeThreadId === aggregate.thread.id
       const useServerWorkflow = aggregate.serverStep !== 'idle'
       const preserveLocalMock = sameThread && !useServerWorkflow
+      const activeSession = aggregate.activeUnderstandingSession
+      const serverUnderstanding = useServerWorkflow ? aggregate.understanding : state.serverUnderstanding
+      const preserveAnswerDraft = sameThread
+        && state.currentQuestionIndex === aggregate.currentQuestionIndex
       return {
         ...state,
         activeThread: aggregate.thread,
@@ -119,15 +163,40 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         uiThreadStatus: preserveLocalMock ? state.uiThreadStatus : aggregate.thread.status,
         uiThreadPhase: preserveLocalMock ? state.uiThreadPhase : aggregate.thread.phase,
         activeUnderstandingSession: useServerWorkflow
-          ? aggregate.activeUnderstandingSession
+          ? activeSession
           : state.activeUnderstandingSession,
+        understandingSessionId: useServerWorkflow
+          ? activeSession?.id ?? null
+          : state.understandingSessionId,
+        understandingStatus: useServerWorkflow
+          ? activeSession?.status ?? 'idle'
+          : state.understandingStatus,
+        understandingConfirmedAt: useServerWorkflow
+          ? activeSession?.confirmedAt ?? null
+          : state.understandingConfirmedAt,
+        serverUnderstanding,
+        understandingRequestStatus: useServerWorkflow ? 'success' : state.understandingRequestStatus,
+        understandingApiError: null,
+        understandingSource: useServerWorkflow ? 'api' : state.understandingSource,
+        lastSuccessfulUnderstandingAt: useServerWorkflow
+          ? activeSession?.updatedAt ?? state.lastSuccessfulUnderstandingAt
+          : state.lastSuccessfulUnderstandingAt,
         expressionMode: useServerWorkflow ? aggregate.expressionMode : state.expressionMode,
         userInput: useServerWorkflow ? aggregate.userInput : state.userInput,
+        currentAnswerDraft: useServerWorkflow
+          ? preserveAnswerDraft
+            ? state.currentAnswerDraft
+            : aggregate.currentQuestion
+              ? aggregate.answers[aggregate.currentQuestion.id] ?? ''
+              : ''
+          : state.currentAnswerDraft,
         answers: useServerWorkflow ? aggregate.answers : state.answers,
+        submittedAnswers: useServerWorkflow ? aggregate.answers : state.submittedAnswers,
         answerMeta: useServerWorkflow ? aggregate.answerMeta : state.answerMeta,
         currentQuestionIndex: useServerWorkflow
           ? aggregate.currentQuestionIndex
           : state.currentQuestionIndex,
+        currentQuestion: useServerWorkflow ? aggregate.currentQuestion : state.currentQuestion,
         understanding: useServerWorkflow ? aggregate.understanding : state.understanding,
         corrections: useServerWorkflow ? aggregate.corrections : state.corrections,
         currentPlan: useServerWorkflow ? aggregate.currentPlan : state.currentPlan,
@@ -164,91 +233,156 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         {
           ...state,
           expressionMode: action.mode,
-          currentStep: action.mode === 'ask' ? 'asking_question' : 'collecting_input',
+          currentStep: action.mode === 'ask' ? 'expression_mode' : 'collecting_input',
+          understandingApiError: null,
+          understandingRequestStatus: 'idle',
+          currentAnswerDraft: '',
+          understandingAssessmentDraft: null,
+          understandingCorrectionDraft: '',
         },
         '正在理解',
-        action.mode === 'ask' ? '理解目标' : '收集表达',
+        action.mode === 'ask' ? '准备提问' : '收集表达',
       )
 
     case 'UPDATE_USER_INPUT':
       return { ...state, userInput: action.value }
 
-    case 'SUBMIT_USER_INPUT':
-      if (!state.expressionMode || !state.userInput.trim()) return state
-      return withThread({ ...state, currentStep: 'asking_question' }, '正在理解', '理解目标')
+    case 'UPDATE_ANSWER_DRAFT':
+      return { ...state, currentAnswerDraft: action.value }
 
-    case 'ANSWER_QUESTION': {
-      const answer = action.answer.trim()
-      if (!answer) return state
-      const question = interactionQuestions[state.currentQuestionIndex]
-      if (!question) return state
-      const answers = { ...state.answers, [question.id]: answer }
-      const isLast = state.currentQuestionIndex === interactionQuestions.length - 1
+    case 'UPDATE_UNDERSTANDING_ASSESSMENT':
+      return {
+        ...state,
+        understandingAssessmentDraft: action.assessment,
+        understandingCorrectionDraft: action.assessment ? state.understandingCorrectionDraft : '',
+      }
+
+    case 'UPDATE_UNDERSTANDING_CORRECTION':
+      return { ...state, understandingCorrectionDraft: action.value }
+
+    case 'UNDERSTANDING_REQUEST_STARTED':
+      return {
+        ...state,
+        understandingRequestStatus: 'loading',
+        understandingApiError: null,
+      }
+
+    case 'UNDERSTANDING_ANALYZE_SUCCEEDED': {
+      const { result } = action
+      const sameSession = state.understandingSessionId === result.session.id
+      const serverUnderstanding = result.understanding
+        ?? (sameSession ? state.serverUnderstanding : null)
+      const threadState = updateThreadStep(state, result.currentStep, result.session.id)
       return withThread(
         {
           ...state,
-          answers,
-          currentQuestionIndex: isLast ? state.currentQuestionIndex : state.currentQuestionIndex + 1,
-          currentStep: isLast ? 'reviewing_understanding' : 'asking_question',
-          understanding: isLast ? generateUnderstanding(state.userInput, answers) : state.understanding,
+          ...threadState,
+          currentStep: result.currentStep,
+          serverStep: result.currentStep,
+          activeUnderstandingSession: result.session,
+          understandingSessionId: result.session.id,
+          understandingStatus: result.session.status,
+          understandingConfirmedAt: result.session.confirmedAt,
+          serverUnderstanding,
+          understandingRequestStatus: 'success',
+          understandingApiError: null,
+          understandingSource: 'api',
+          lastSuccessfulUnderstandingAt: result.session.updatedAt,
+          expressionMode: result.session.expressionMode,
+          userInput: result.session.userInput ?? state.userInput,
+          currentAnswerDraft: result.nextQuestion
+            ? result.submittedAnswers[result.nextQuestion.id] ?? ''
+            : '',
+          answers: result.submittedAnswers,
+          submittedAnswers: result.submittedAnswers,
+          answerMeta: result.answerMeta,
+          currentQuestionIndex: result.nextQuestion?.index ?? result.session.currentQuestionIndex,
+          currentQuestion: result.nextQuestion,
+          understanding: serverUnderstanding,
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
         },
         '正在理解',
-        isLast ? '理解确认' : '核对现实',
+        result.currentStep === 'reviewing_understanding' ? '理解确认' : '核对现实',
       )
+    }
+
+    case 'UNDERSTANDING_CONFIRM_SUCCEEDED': {
+      const { result } = action
+      const corrections = result.correction
+        ? [...state.corrections.filter((item) => item.id !== result.correction?.id), result.correction]
+        : state.corrections
+      const threadState = updateThreadStep(state, result.currentStep, result.session.id)
+      return withThread(
+        {
+          ...state,
+          ...threadState,
+          currentStep: result.currentStep,
+          serverStep: result.currentStep,
+          activeUnderstandingSession: result.session,
+          understandingSessionId: result.session.id,
+          understandingStatus: result.session.status,
+          understandingConfirmedAt: result.session.confirmedAt,
+          serverUnderstanding: result.understanding,
+          understanding: result.understanding,
+          corrections,
+          currentQuestion: null,
+          currentAnswerDraft: '',
+          understandingAssessmentDraft: null,
+          understandingCorrectionDraft: '',
+          understandingRequestStatus: 'success',
+          understandingApiError: null,
+          understandingSource: 'api',
+          lastSuccessfulUnderstandingAt: result.session.updatedAt,
+          serverSnapshot: result.snapshot ?? state.serverSnapshot,
+          snapshotId: result.snapshot?.id ?? state.snapshotId,
+          snapshotVersion: result.snapshot?.version ?? state.snapshotVersion,
+          systemSnapshot: result.snapshot ?? state.systemSnapshot,
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
+        },
+        result.currentStep === 'understanding_confirmed' ? '理解已确认' : '正在理解',
+        result.currentStep === 'understanding_confirmed' ? '起点档案' : '理解确认',
+      )
+    }
+
+    case 'UNDERSTANDING_REQUEST_FAILED': {
+      const offline = ['NETWORK_ERROR', 'TIMEOUT'].includes(action.error.code)
+      return {
+        ...state,
+        understandingRequestStatus: 'error',
+        understandingApiError: action.error,
+        understandingSource: offline && state.serverUnderstanding ? 'cache' : state.understandingSource,
+        isOfflineCache: offline && Boolean(state.serverUnderstanding || state.activeThread),
+      }
     }
 
     case 'GO_TO_PREVIOUS_QUESTION':
-      return {
-        ...state,
-        currentQuestionIndex: Math.max(0, state.currentQuestionIndex - 1),
-        currentStep: 'asking_question',
-      }
-
-    case 'ADD_CORRECTION': {
-      const value = action.value.trim()
-      if (!value || !state.understanding) return state
-      return {
-        ...state,
-        currentStep: 'reviewing_understanding',
-        understanding: { ...state.understanding, uncertain: `用户补充：${value}` },
-        corrections: [
-          ...state.corrections,
-          {
-            id: `correction-${Date.now()}`,
-            target: 'understanding',
-            assessment: action.assessment,
-            previousValue: state.understanding.uncertain,
-            userValue: value,
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      }
-    }
-
-    case 'CONFIRM_UNDERSTANDING':
-      if (!state.understanding || interactionQuestions.some((question) => !state.answers[question.id]?.trim())) {
-        return state
-      }
-      return withThread(
-        {
+      {
+        const currentQuestionIndex = Math.max(0, state.currentQuestionIndex - 1)
+        const currentQuestion = understandingQuestions[currentQuestionIndex] ?? null
+        return {
           ...state,
-          currentStep: 'understanding_confirmed',
-          systemSnapshot: {
-            ...state.systemSnapshot,
-            currentVector: state.understanding.realGoal,
-            realityBoundaries: [state.understanding.constraints, ...state.systemSnapshot.realityBoundaries].slice(0, 3),
-            userCorrections: [
-              ...state.corrections.map((item) => item.userValue),
-              ...state.systemSnapshot.userCorrections,
-            ].slice(0, 4),
-          },
-        },
-        '理解已确认',
-        '起点档案',
-      )
+          currentQuestionIndex,
+          currentQuestion,
+          currentAnswerDraft: currentQuestion ? state.submittedAnswers[currentQuestion.id] ?? '' : '',
+          currentStep: 'asking_question',
+          understandingApiError: null,
+          understandingRequestStatus: 'idle',
+        }
+      }
 
     case 'GENERATE_PLAN': {
-      if (state.currentStep !== 'understanding_confirmed' || !state.understanding) return state
+      if (
+        state.currentStep !== 'understanding_confirmed'
+        || state.serverStep !== 'understanding_confirmed'
+        || state.understandingStatus !== 'confirmed'
+        || !state.serverUnderstanding
+        || state.understandingSource !== 'api'
+        || state.isOfflineCache
+      ) return state
       const plan = generatePlan(state)
       const previousVersions = state.planVersions.map((item) =>
         item.id === state.currentPlan?.id ? { ...item, status: 'superseded' as const } : item,
@@ -306,9 +440,31 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
 
     case 'REOPEN_QUESTIONS':
       return withThread(
-        { ...state, currentStep: 'asking_question', currentQuestionIndex: 0 },
+        {
+          ...state,
+          currentStep: 'expression_mode',
+          activeUnderstandingSession: null,
+          understandingSessionId: null,
+          understandingStatus: 'idle',
+          understandingConfirmedAt: null,
+          serverUnderstanding: null,
+          understandingRequestStatus: 'idle',
+          understandingApiError: null,
+          understandingSource: 'api',
+          expressionMode: null,
+          userInput: '',
+          currentAnswerDraft: '',
+          understandingAssessmentDraft: null,
+          understandingCorrectionDraft: '',
+          answers: {},
+          submittedAnswers: {},
+          answerMeta: {},
+          currentQuestionIndex: 0,
+          currentQuestion: null,
+          understanding: null,
+        },
         '正在重新核对',
-        '理解目标',
+        '选择表达方式',
       )
 
     case 'START_ACTION':

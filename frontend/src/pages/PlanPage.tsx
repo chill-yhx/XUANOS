@@ -45,11 +45,13 @@ export function PlanPage({ onNavigate }: PageProps) {
     <section className="page page-stack">
       <header className="page-heading">
         <div>
-          <div className="eyebrow">PLAN DECISION · V{plan.version}</div>
+          <div className="eyebrow">PLAN DECISION · MOCK · V{plan.version}</div>
           <h1>计划裁决</h1>
         </div>
         <p className="page-heading-copy">明确保留、暂停和删除。每次修改都留下版本。</p>
       </header>
+
+      <WarningBanner tone="gold">当前计划裁决仍由前端 Mock 规则生成，尚未接入计划 API。</WarningBanner>
 
       <PlanDecisionCard plan={plan} />
 

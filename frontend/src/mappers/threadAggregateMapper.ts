@@ -1,4 +1,5 @@
 import type { ThreadAggregateDto, ThreadDto } from '../api/dto'
+import { understandingQuestionAt } from '../data/understandingQuestions'
 import type { ActiveThread, InteractionStep, ThreadAggregateState } from '../types'
 import { actionResultMapper, systemRevisionMapper } from './actionResultMapper'
 import { planMapper } from './planMapper'
@@ -59,6 +60,9 @@ export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateS
     : null
   const { answers, answerMeta } = answersMapper(dto.current_answers)
   const latestActionResult = dto.latest_action_result ? actionResultMapper(dto.latest_action_result) : null
+  const currentQuestion = thread.currentStep === 'asking_question' && activeUnderstandingSession
+    ? understandingQuestionAt(activeUnderstandingSession.currentQuestionIndex)
+    : null
 
   return {
     thread,
@@ -69,6 +73,7 @@ export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateS
     answers,
     answerMeta,
     currentQuestionIndex: activeUnderstandingSession?.currentQuestionIndex ?? 0,
+    currentQuestion,
     understanding,
     corrections: dto.recent_corrections.map(correctionMapper),
     currentPlan,

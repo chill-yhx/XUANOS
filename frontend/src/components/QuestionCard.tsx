@@ -10,18 +10,31 @@ interface QuestionCardProps {
   onChange: (value: string) => void
   onSubmit: () => void
   onBack?: () => void
+  isLoading?: boolean
 }
 
-export function QuestionCard({ prompt, hint, value, index, total, onChange, onSubmit, onBack }: QuestionCardProps) {
+export function QuestionCard({
+  prompt,
+  hint,
+  value,
+  index,
+  total,
+  onChange,
+  onSubmit,
+  onBack,
+  isLoading = false,
+}: QuestionCardProps) {
   return (
     <div>
       <div className="question-progress">QUESTION {index + 1} / {total}</div>
       <p className="question-copy">{prompt}</p>
       <p className="question-hint">{hint}</p>
-      <textarea className="short-input question-answer" value={value} onChange={(event) => onChange(event.target.value)} placeholder="写下当前最真实的答案。" />
+      <textarea className="short-input question-answer" value={value} onChange={(event) => onChange(event.target.value)} placeholder="写下当前最真实的答案。" disabled={isLoading} />
       <div className="button-row">
-        {onBack && <SecondaryButton onClick={onBack}>上一题</SecondaryButton>}
-        <PrimaryButton onClick={onSubmit} disabled={!value.trim()}>{index === total - 1 ? '生成理解摘要' : '确认并继续'}</PrimaryButton>
+        {onBack && <SecondaryButton onClick={onBack} disabled={isLoading}>上一题</SecondaryButton>}
+        <PrimaryButton onClick={onSubmit} disabled={!value.trim() || isLoading}>
+          {isLoading ? '正在保存' : index === total - 1 ? '生成理解摘要' : '确认并继续'}
+        </PrimaryButton>
       </div>
     </div>
   )
