@@ -82,7 +82,7 @@ function publicApiError(error: ApiError): { code: string; message: string } {
     return { code: error.code, message: '当前流程状态不允许执行此操作。' }
   }
   if (error.code === 'RESOURCE_NOT_FOUND') {
-    return { code: error.code, message: '当前任务或理解会话不存在。' }
+    return { code: error.code, message: '当前任务、计划或流程记录不存在。' }
   }
   if (error.code === 'DUPLICATE_SUBMISSION') {
     return { code: error.code, message: '检测到重复提交，请确认内容后重试。' }

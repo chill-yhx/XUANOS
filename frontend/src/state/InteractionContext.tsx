@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { toApiErrorState } from '../api/apiErrors'
+import { submitActionResult as submitActionResultOnServer } from '../services/actionResultService'
 import { getCurrentSnapshot } from '../services/snapshotService'
 import {
   acceptPlan as acceptPlanOnServer,
@@ -41,6 +42,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const snapshotRequestRef = useRef<Promise<void> | null>(null)
   const understandingRequestRef = useRef<Promise<boolean> | null>(null)
   const planRequestRef = useRef<Promise<boolean> | null>(null)
+  const actionResultRequestRef = useRef<Promise<boolean> | null>(null)
 
   useEffect(() => {
     stateRef.current = state
@@ -387,6 +389,78 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     })
   }, [failPlanGuard, runPlanRequest])
 
+  const failActionResultGuard = useCallback((message: string) => {
+    const error: ApiErrorState = {
+      code: 'INVALID_FLOW_STATE',
+      message,
+      status: null,
+      requestId: null,
+    }
+    dispatch({ type: 'ACTION_RESULT_REQUEST_FAILED', error })
+    return false
+  }, [])
+
+  const submitCurrentActionResult = useCallback(async () => {
+    const current = stateRef.current
+    const plan = current.currentPlan
+    const feedback = current.actionFeedback
+    if (!current.activeThreadId) return failActionResultGuard('没有真实任务线程，不能提交行动反馈。')
+    if (!plan || plan.status !== 'accepted') return failActionResultGuard('当前计划尚未接受，不能提交反馈。')
+    if (!current.activePlanId || current.activePlanId !== plan.id) {
+      return failActionResultGuard('当前计划指针无效，请先同步任务线程。')
+    }
+    if (current.planSource !== 'api' || current.isOfflineCache) {
+      return failActionResultGuard('无法连接 XUANOS 服务，反馈草稿已保留。')
+    }
+    if (!feedback.resultStatus) return failActionResultGuard('请选择本次行动结果。')
+    if (
+      feedback.actualDurationMinutes === null
+      || !Number.isInteger(feedback.actualDurationMinutes)
+      || feedback.actualDurationMinutes < 0
+    ) return failActionResultGuard('实际用时必须是非负整数分钟。')
+    if (!feedback.obstacleCode) return failActionResultGuard('请选择本次最大阻力。')
+    if (
+      feedback.resultStatus === 'partially_completed'
+      && (feedback.progressPercent <= 0 || feedback.progressPercent >= 100)
+    ) return failActionResultGuard('部分完成的比例必须在 1% 到 99% 之间。')
+    if (!feedback.actionIdentifier || feedback.planId !== plan.id) {
+      return failActionResultGuard('当前唯一行动尚未绑定，请重新进入行动反馈。')
+    }
+    if (current.actionResultRequestStatus === 'loading') return false
+    if (actionResultRequestRef.current) return actionResultRequestRef.current
+
+    const request = (async () => {
+      dispatch({ type: 'ACTION_RESULT_REQUEST_STARTED' })
+      try {
+        const result = await submitActionResultOnServer({
+          threadId: current.activeThreadId!,
+          planId: plan.id,
+          planItemId: feedback.planItemId,
+          actionIdentifier: feedback.actionIdentifier!,
+          feedback,
+          previousSnapshot: current.latestSnapshot ?? current.serverSnapshot,
+        })
+        dispatch({ type: 'ACTION_RESULT_SUCCEEDED', result })
+        try {
+          const aggregate = await getThread(current.activeThreadId!)
+          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+        } catch (error) {
+          dispatch({ type: 'ACTION_RESULT_READBACK_FAILED', error: toApiErrorState(error) })
+        }
+        return true
+      } catch (error) {
+        dispatch({ type: 'ACTION_RESULT_REQUEST_FAILED', error: toApiErrorState(error) })
+        return false
+      }
+    })()
+    actionResultRequestRef.current = request
+    try {
+      return await request
+    } finally {
+      if (actionResultRequestRef.current === request) actionResultRequestRef.current = null
+    }
+  }, [failActionResultGuard])
+
   const resetDemo = () => {
     clearIntegrationCache()
     dispatch({ type: 'RESET_DEMO_DATA' })
@@ -408,6 +482,7 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         reviseCurrentPlan,
         acceptCurrentPlan,
         refreshActiveThread,
+        submitCurrentActionResult,
         continuePage: pageForStep(state.currentStep),
       }}
     >

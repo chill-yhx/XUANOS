@@ -231,6 +231,46 @@ export interface ActionResultDto {
   updated_at: string
 }
 
+export interface ActionResultCreateDto {
+  thread_id: string
+  plan_id: string
+  started: boolean
+  completed: boolean
+  progress_percent: number
+  actual_duration_minutes: number | null
+  obstacle_code: string
+  obstacle_detail: string | null
+  energy_change: string | null
+  unrealistic_part: string | null
+}
+
+export interface SystemRevisionDto {
+  original_judgment: string
+  actual_result: string
+  revised_judgment: string
+  next_adjustment: string
+}
+
+export interface ActionHypothesisDto {
+  id: string
+  content: string
+  category: string
+  status: string
+  supporting_evidence: Array<Record<string, unknown>>
+  opposing_evidence: Array<Record<string, unknown>>
+  last_reviewed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ActionSubmissionResultDto {
+  action_result: ActionResultDto
+  system_revision: SystemRevisionDto
+  hypothesis: ActionHypothesisDto
+  snapshot: SnapshotDto
+  current_step: string
+}
+
 export interface ThreadAggregateDto {
   thread: ThreadDto
   active_understanding_session: UnderstandingSessionDto | null

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { diaryEntries } from '../data/mockData'
 import type { PageId, SystemSection, SystemViewMode } from '../types'
 import { GlassPanel } from '../components/GlassPanel'
+import { PrimaryButton } from '../components/PrimaryButton'
 import { SecondaryButton } from '../components/SecondaryButton'
+import { SnapshotDiffPanel } from '../components/SnapshotDiffPanel'
 import { SystemSnapshotCard } from '../components/SystemSnapshotCard'
 import { SystemViewToggle } from '../components/SystemViewToggle'
+import { Tag } from '../components/Tag'
 import { WarningBanner } from '../components/WarningBanner'
 import { useInteraction } from '../state/useInteraction'
 
@@ -16,7 +18,7 @@ export function SystemPage({ onNavigate }: PageProps) {
   const { state, dispatch, refreshSnapshot, resetDemo } = useInteraction()
   const [mode, setMode] = useState<SystemViewMode>('mixed')
   const [notice, setNotice] = useState('')
-  const snapshot = state.serverSnapshot ?? state.systemSnapshot
+  const snapshot = state.latestSnapshot ?? state.serverSnapshot ?? state.systemSnapshot
   const localCorrections = state.corrections
     .filter((item) => item.assessment === 'system_snapshot')
     .map((item) => `${item.target}：${item.userValue}（本地演示）`)
@@ -36,12 +38,14 @@ export function SystemPage({ onNavigate }: PageProps) {
     },
     {
       id: 'working', title: '对我有效', english: 'WORKING PATTERNS', tone: 'success',
-      entries: snapshot.effectivePatterns.slice(-3).map((item) => item.content),
-      footnote: snapshot.revisionCount > 0 ? '包含本次行动产生的候选规律，仍需后续验证。' : '当前为初始候选，等待行动证据。',
+      entries: snapshot.effectivePatterns.slice(-3).map((item) => `${item.content} · ${item.maturity}`),
+      footnote: snapshot.revisionCount > 0 ? '行动证据产生的候选规律，仍需后续重复验证。' : '等待真实行动证据。',
     },
     {
       id: 'review', title: '系统仍在验证', english: 'UNDER REVIEW', tone: 'impact',
-      entries: snapshot.hypotheses.length ? snapshot.hypotheses.slice(0, 3).map((item) => item.content) : ['本轮原假设已被行动结果削弱，等待新的重复证据。'],
+      entries: snapshot.hypotheses.length
+        ? snapshot.hypotheses.slice(0, 3).map((item) => `${item.content} · ${item.status}`)
+        : ['当前没有继续生效的待验证判断。'],
     },
     {
       id: 'revision', title: '最近修正', english: 'RECENT REVISION', tone: 'gold',
@@ -64,34 +68,48 @@ export function SystemPage({ onNavigate }: PageProps) {
     onNavigate('home')
   }
 
+  const startNextFeedback = () => {
+    dispatch({ type: 'START_ACTION' })
+    onNavigate('feedback')
+  }
+
   const showProfile = mode === 'profile' || mode === 'mixed'
   const showDiary = mode === 'diary' || mode === 'mixed'
   const visibleSections = mode === 'mixed'
     ? systemSections.filter((section) => ['vector', 'working', 'review', 'revision'].includes(section.id))
     : systemSections
-  const dynamicDiary = state.systemRevision
-    ? [{ label: '刚刚', title: '系统修正', content: state.systemRevision.revisedJudgment }, ...diaryEntries]
-    : diaryEntries
+  const serverNotes = snapshot.recentRevisions.map((content, index) => ({
+    label: index === 0 ? 'LATEST' : `REV ${snapshot.revisionCount - index}`,
+    title: index === 0 ? '最新系统修正' : '历史修正',
+    content,
+  }))
+  const sourceTag = state.isOfflineCache
+    ? <Tag tone="impact">OFFLINE CACHE</Tag>
+    : snapshot.id
+      ? <Tag tone="success">SERVER RESULT</Tag>
+      : <Tag tone="muted">DEVELOPMENT MOCK</Tag>
 
   return (
     <section className="page system-stack">
       <header className="page-heading">
         <div>
-          <div className="eyebrow">PERSONAL SYSTEM · REVISION {snapshot.revisionCount}</div>
+          <div className="eyebrow">PERSONAL SYSTEM · SNAPSHOT V{snapshot.version}</div>
           <h1>我的系统</h1>
         </div>
-        <p className="page-heading-copy">这是可纠正、会更新的当前快照，不是对你的固定定义。</p>
+        <div className="plan-source-meta">
+          {sourceTag}
+          {snapshot.createdAt && <span>{new Date(snapshot.createdAt).toLocaleString()}</span>}
+        </div>
       </header>
 
-      {snapshot.revisionCount > 0 && (
+      {state.systemRevisionSource !== 'mock' && state.systemRevision && (
         <WarningBanner tone="gold">我的系统已经因为这次反馈发生变化。当前阶段与唯一行动已更新。</WarningBanner>
       )}
-
       {state.isOfflineCache && (
-        <WarningBanner tone="impact">离线缓存 · 当前显示最近一次成功同步的用户快照。</WarningBanner>
+        <WarningBanner tone="impact">离线缓存 · 当前显示最近一次成功同步的行动结果与用户快照。</WarningBanner>
       )}
-      {state.apiError && !state.serverSnapshot && (
-        <WarningBanner tone="risk">服务端快照不可用。本地 Mock 仅用于界面演示，不作为个人系统事实。</WarningBanner>
+      {state.apiError && !snapshot.id && (
+        <WarningBanner tone="risk">服务端快照不可用。本地演示数据不作为个人系统事实。</WarningBanner>
       )}
 
       <GlassPanel
@@ -102,9 +120,24 @@ export function SystemPage({ onNavigate }: PageProps) {
         action={<SecondaryButton onClick={handleReset}>重置演示数据</SecondaryButton>}
       >
         <SystemViewToggle value={mode} onChange={setMode} />
+        <div className="snapshot-meta-grid">
+          <div><span className="metric-label">SNAPSHOT</span><strong>V{snapshot.version}</strong></div>
+          <div><span className="metric-label">SOURCE ACTION</span><strong>{snapshot.sourceActionResultId ?? '尚无行动结果'}</strong></div>
+          <div><span className="metric-label">CREATED AT</span><strong>{snapshot.createdAt ? new Date(snapshot.createdAt).toLocaleString() : '未同步'}</strong></div>
+        </div>
       </GlassPanel>
 
       {notice && <WarningBanner tone="gold">{notice}</WarningBanner>}
+
+      {state.snapshotDiff && state.systemRevisionSource !== 'mock' && (
+        <GlassPanel
+          variant="primary"
+          eyebrow={state.systemRevisionSource === 'api' ? 'SYSTEM CHANGE · SERVER RESULT' : 'SYSTEM CHANGE · OFFLINE CACHE'}
+          title={`本次系统变化 · V${state.snapshotDiff.fromVersion ?? '?'} → V${state.snapshotDiff.toVersion}`}
+        >
+          <SnapshotDiffPanel diff={state.snapshotDiff} />
+        </GlassPanel>
+      )}
 
       {showProfile && (
         <section className="system-snapshot-grid" aria-label="个人系统档案">
@@ -113,19 +146,30 @@ export function SystemPage({ onNavigate }: PageProps) {
       )}
 
       {showDiary && (
-        <GlassPanel variant="secondary" eyebrow="RECENT NOTES" title="近期记录">
-          <div className="diary-panel">
-            {dynamicDiary.slice(0, mode === 'mixed' ? 3 : 6).map((entry, index) => (
-              <article className="diary-entry" key={`${entry.title}-${index}`}>
-                <span className="metric-label">{entry.label}</span>
-                <div>
-                  <div className="micro-label">{entry.title}</div>
-                  <p>{entry.content}</p>
-                </div>
-              </article>
-            ))}
-          </div>
+        <GlassPanel variant="secondary" eyebrow="SERVER REVISION LOG" title="近期记录">
+          {serverNotes.length ? (
+            <div className="diary-panel">
+              {serverNotes.slice(0, mode === 'mixed' ? 3 : 6).map((entry, index) => (
+                <article className="diary-entry" key={`${entry.title}-${index}`}>
+                  <span className="metric-label">{entry.label}</span>
+                  <div>
+                    <div className="micro-label">{entry.title}</div>
+                    <p>{entry.content}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : <p className="snapshot-no-change">当前还没有服务端修正记录。</p>}
         </GlassPanel>
+      )}
+
+      {state.currentPlan?.status === 'accepted' && (
+        <div className="button-row">
+          <PrimaryButton onClick={startNextFeedback} disabled={state.isOfflineCache || state.planSource !== 'api'}>
+            记录下一次行动
+          </PrimaryButton>
+          <SecondaryButton onClick={() => onNavigate('feedback')}>查看最近反馈</SecondaryButton>
+        </div>
       )}
     </section>
   )

@@ -30,6 +30,18 @@ export type RequestStatus = 'idle' | 'loading' | 'success' | 'error'
 
 export type UnderstandingStatus = 'idle' | 'collecting' | 'reviewing' | 'confirmed'
 
+export type ActionResultStatus = 'completed' | 'partially_completed' | 'not_completed' | 'abandoned'
+
+export type ActionObstacleCode =
+  | 'low_energy'
+  | 'unclear_action'
+  | 'lack_of_time'
+  | 'emotional_resistance'
+  | 'environment_interrupt'
+  | 'missing_resource'
+  | 'task_too_large'
+  | 'other'
+
 export interface ApiErrorState {
   code: string
   message: string
@@ -66,14 +78,16 @@ export interface SystemSection {
 }
 
 export interface FeedbackPayload {
-  started: boolean
-  completed: boolean
-  progress: number
+  resultStatus: ActionResultStatus | null
+  progressPercent: number
   actualDurationMinutes: number | null
-  obstacleCode: string
-  obstacleDetail: string
+  obstacleCode: ActionObstacleCode | null
+  userNote: string
   energyChange: string
   unrealisticPart: string
+  planId: string | null
+  planItemId: string | null
+  actionIdentifier: string | null
 }
 
 export interface UnderstandingSummary {
@@ -236,12 +250,15 @@ export interface SystemRevision {
 export interface EffectivePattern {
   content: string
   maturity: string
+  confidence?: number | null
+  supportCount?: number | null
 }
 
 export interface HypothesisSummary {
   id: string
   content: string
   status: string
+  confidence?: number | null
 }
 
 export interface SystemSnapshot {
@@ -265,13 +282,18 @@ export interface SystemSnapshot {
 
 export interface ActionResult {
   id: string
+  userId: string
   threadId: string
   planId: string
+  planItemId: string | null
+  actionIdentifier: string
+  resultStatus: ActionResultStatus
   started: boolean
   completed: boolean
   progressPercent: number
   actualDurationMinutes: number | null
   obstacleCode: string
+  userNote: string | null
   obstacleDetail: string | null
   energyChange: string | null
   unrealisticPart: string | null
@@ -282,6 +304,51 @@ export interface ActionResult {
   submittedAt: string
   createdAt: string
   updatedAt: string
+}
+
+export interface ActionHypothesis {
+  id: string
+  content: string
+  category: string
+  status: string
+  supportingEvidence: Array<Record<string, unknown>>
+  opposingEvidence: Array<Record<string, unknown>>
+  lastReviewedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type SnapshotChangeKind = 'added' | 'modified' | 'retained' | 'weakened' | 'rejected'
+
+export type SnapshotChangeArea = 'hypothesis' | 'pattern' | 'focus' | 'action' | 'boundary'
+
+export interface SnapshotChange {
+  id: string
+  kind: SnapshotChangeKind
+  area: SnapshotChangeArea
+  label: string
+  before: string | null
+  after: string | null
+}
+
+export interface SnapshotDiff {
+  fromSnapshotId: string | null
+  toSnapshotId: string | null
+  fromVersion: number | null
+  toVersion: number
+  hasChanges: boolean
+  isComparable: boolean
+  changes: SnapshotChange[]
+}
+
+export interface ActionSubmissionResult {
+  actionResult: ActionResult
+  systemRevision: SystemRevision
+  hypothesis: ActionHypothesis
+  snapshot: SystemSnapshot
+  previousSnapshot: SystemSnapshot | null
+  snapshotDiff: SnapshotDiff
+  currentStep: InteractionStep
 }
 
 export interface ActiveThread {
@@ -365,6 +432,18 @@ export interface DemoSessionState {
   lastViewedPlanId: string | null
   planModificationDraft: PlanModificationDraft
   actionFeedback: FeedbackPayload
+  actionResultId: string | null
+  actionResultStatus: ActionResultStatus | null
+  actionResultSubmittedAt: string | null
+  actionResultRequestStatus: RequestStatus
+  actionResultApiError: ApiErrorState | null
+  actionResultSource: DataSource
+  latestSnapshot: SystemSnapshot | null
+  previousSnapshot: SystemSnapshot | null
+  snapshotDiff: SnapshotDiff | null
+  latestActionHypothesis: ActionHypothesis | null
+  systemRevisionSource: DataSource
+  systemRevisionAt: string | null
   systemRevision: SystemRevision | null
   systemSnapshot: SystemSnapshot
 }

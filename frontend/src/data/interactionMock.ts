@@ -4,20 +4,20 @@ import type {
   PlanModificationReason,
   PlanVersion,
   QuestionId,
-  SystemRevision,
-  SystemSnapshot,
   UnderstandingSummary,
 } from '../types'
 
 export const initialFeedback: FeedbackPayload = {
-  started: true,
-  completed: false,
-  progress: 40,
-  actualDurationMinutes: 45,
-  obstacleCode: 'action_unclear',
-  obstacleDetail: '',
-  energyChange: '开始后更专注',
-  unrealisticPart: '开始前仍花了较多时间确认细节，原计划需要更快进入第一版界面。',
+  resultStatus: null,
+  progressPercent: 0,
+  actualDurationMinutes: null,
+  obstacleCode: null,
+  userNote: '',
+  energyChange: '',
+  unrealisticPart: '',
+  planId: null,
+  planItemId: null,
+  actionIdentifier: null,
 }
 
 export function createInitialSession(): DemoSessionState {
@@ -75,6 +75,18 @@ export function createInitialSession(): DemoSessionState {
       expectedImpactAcknowledged: false,
     },
     actionFeedback: { ...initialFeedback },
+    actionResultId: null,
+    actionResultStatus: null,
+    actionResultSubmittedAt: null,
+    actionResultRequestStatus: 'idle',
+    actionResultApiError: null,
+    actionResultSource: 'mock',
+    latestSnapshot: null,
+    previousSnapshot: null,
+    snapshotDiff: null,
+    latestActionHypothesis: null,
+    systemRevisionSource: 'mock',
+    systemRevisionAt: null,
     systemRevision: null,
     systemSnapshot: {
       id: null,
@@ -152,63 +164,5 @@ export function createModifiedPlan(
     expectedImpact: impact,
     isUserFinalChoice: true,
     createdAt: new Date().toISOString(),
-  }
-}
-
-export function reviseSystem(
-  snapshot: SystemSnapshot,
-  feedback: FeedbackPayload,
-  plan: PlanVersion,
-): { snapshot: SystemSnapshot; revision: SystemRevision } {
-  const actualResult = feedback.started
-    ? `${feedback.progress}% 完成，实际用时 ${feedback.actualDurationMinutes ?? 0} 分钟，最大阻力为“${feedback.obstacleCode}”。`
-    : `本次没有开始，最大阻力为“${feedback.obstacleCode}”。`
-
-  let revisedJudgment = '任务需要更小、更明确的启动动作。'
-  let nextAdjustment = '先完成首页与理解页的状态接线。'
-  let nextStage = '启动阻力校准'
-  let effectivePattern = '任务缩小到单一交付物时更容易启动'
-
-  if (feedback.completed) {
-    revisedJudgment = '明确范围后可以完成闭环，下一轮应转向真实可用性验证。'
-    nextAdjustment = '完整复测五页流程并记录阻塞点。'
-    nextStage = '闭环复测'
-    effectivePattern = '以完整可运行闭环作为完成标准有效'
-  } else if (feedback.started && feedback.progress >= 50) {
-    revisedJudgment = '计划方向有效，但任务范围仍需按剩余工作收缩。'
-    nextAdjustment = '完成剩余页面接线，不新增视觉细节。'
-    nextStage = 'Mock 闭环收束'
-  } else if (!feedback.started) {
-    nextAdjustment = '打开项目并只完成表达方式选择的状态接线。'
-  }
-
-  const revision: SystemRevision = {
-    originalJudgment: `当前行动“${plan.singleAction}”可以在本阶段推进。`,
-    actualResult,
-    revisedJudgment,
-    nextAdjustment,
-  }
-
-  return {
-    revision,
-    snapshot: {
-      ...snapshot,
-      version: snapshot.version + 1,
-      currentVector: plan.mainGoal,
-      currentStage: nextStage,
-      currentAction: nextAdjustment,
-      effectivePatterns: snapshot.effectivePatterns.some((item) => item.content === effectivePattern)
-        ? snapshot.effectivePatterns
-        : [...snapshot.effectivePatterns, { content: effectivePattern, maturity: 'candidate' }],
-      hypotheses: feedback.completed
-        ? snapshot.hypotheses.filter((item) => !item.content.includes('完善文档'))
-        : snapshot.hypotheses,
-      recentRevisions: [revisedJudgment, ...snapshot.recentRevisions].slice(0, 3),
-      userCorrections: feedback.unrealisticPart
-        ? [feedback.unrealisticPart, ...snapshot.userCorrections].slice(0, 4)
-        : snapshot.userCorrections,
-      revisionCount: snapshot.revisionCount + 1,
-      updatedAt: new Date().toISOString(),
-    },
   }
 }

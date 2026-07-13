@@ -17,7 +17,7 @@ export function SystemSnapshotCard({ section, onAction }: SystemSnapshotCardProp
         <Tag tone={section.tone}>{section.tone === 'impact' ? '待验证' : '当前'}</Tag>
       </div>
       <ul>
-        {section.entries.map((entry) => <li key={entry}>{entry}</li>)}
+        {section.entries.map((entry, index) => <li key={`${section.id}-${index}`}>{entry}</li>)}
       </ul>
       {section.footnote && <div className="system-footnote">{section.footnote}</div>}
       <details className="snapshot-corrections">

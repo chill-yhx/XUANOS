@@ -183,7 +183,7 @@ export function PlanPage({ onNavigate }: PageProps) {
       </details>
 
       {accepted && isViewingCurrent && (
-        <WarningBanner tone="gold">Plan v{currentPlan.version} 已由服务端接受。行动反馈仍处于 Mock 阶段。</WarningBanner>
+        <WarningBanner tone="gold">Plan v{currentPlan.version} 已由服务端接受。现在可以提交真实行动反馈。</WarningBanner>
       )}
 
       <div className="plan-actions">

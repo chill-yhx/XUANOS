@@ -59,7 +59,13 @@ export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateS
     ? understandingSessionMapper(dto.active_understanding_session)
     : null
   const { answers, answerMeta } = answersMapper(dto.current_answers)
-  const latestActionResult = dto.latest_action_result ? actionResultMapper(dto.latest_action_result) : null
+  const actionItem = currentPlan?.items?.find((item) => item.itemType === 'action')
+  const latestActionResult = dto.latest_action_result
+    ? actionResultMapper(dto.latest_action_result, {
+        planItemId: actionItem?.id ?? null,
+        actionIdentifier: actionItem?.id ?? currentPlan?.singleAction ?? dto.latest_action_result.plan_id,
+      })
+    : null
   const currentQuestion = thread.currentStep === 'asking_question' && activeUnderstandingSession
     ? understandingQuestionAt(activeUnderstandingSession.currentQuestionIndex)
     : null

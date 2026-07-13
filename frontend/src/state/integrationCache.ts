@@ -1,6 +1,6 @@
 import { createInitialSession } from '../data/interactionMock'
 import { understandingQuestionAt } from '../data/understandingQuestions'
-import type { DemoSessionState, InteractionStep } from '../types'
+import type { ActionObstacleCode, DemoSessionState, FeedbackPayload, InteractionStep } from '../types'
 
 const STORAGE_KEY = 'xuanos:demo-user:integration-cache:v2'
 const LEGACY_STORAGE_KEY = 'xuanos:demo-user:session:v1'
@@ -59,15 +59,69 @@ interface IntegrationCache {
     | 'lastViewedPlanId'
   >
   planDrafts: Pick<DemoSessionState, 'planModificationDraft'>
+  actions: Pick<
+    DemoSessionState,
+    | 'latestActionResult'
+    | 'actionResultId'
+    | 'actionResultStatus'
+    | 'actionResultSubmittedAt'
+    | 'latestSnapshot'
+    | 'previousSnapshot'
+    | 'snapshotDiff'
+    | 'latestActionHypothesis'
+    | 'systemRevision'
+    | 'systemRevisionAt'
+  >
+  feedbackDraft: Pick<DemoSessionState, 'actionFeedback'>
   mock: Pick<
     DemoSessionState,
     | 'currentStep'
     | 'uiThreadStatus'
     | 'uiThreadPhase'
-    | 'actionFeedback'
-    | 'systemRevision'
     | 'systemSnapshot'
   >
+}
+
+const obstacleCodes = new Set<ActionObstacleCode>([
+  'low_energy',
+  'unclear_action',
+  'lack_of_time',
+  'emotional_resistance',
+  'environment_interrupt',
+  'missing_resource',
+  'task_too_large',
+  'other',
+])
+
+function restoreFeedbackDraft(
+  fallback: FeedbackPayload,
+  value: Partial<FeedbackPayload> & {
+    started?: boolean
+    completed?: boolean
+    progress?: number
+    obstacleDetail?: string
+  } = {},
+): FeedbackPayload {
+  if ('resultStatus' in value) return { ...fallback, ...value }
+  const rawObstacle = value.obstacleCode as string | null | undefined
+  const legacyObstacle = rawObstacle === 'action_unclear' ? 'unclear_action' : rawObstacle
+  const obstacleCode = obstacleCodes.has(legacyObstacle as ActionObstacleCode)
+    ? legacyObstacle as ActionObstacleCode
+    : null
+  return {
+    ...fallback,
+    resultStatus: value.completed
+      ? 'completed'
+      : value.started === false
+        ? 'not_completed'
+        : value.started ? 'partially_completed' : null,
+    progressPercent: value.progress ?? fallback.progressPercent,
+    actualDurationMinutes: value.actualDurationMinutes ?? fallback.actualDurationMinutes,
+    obstacleCode,
+    userNote: value.obstacleDetail ?? '',
+    energyChange: value.energyChange ?? '',
+    unrealisticPart: value.unrealisticPart ?? '',
+  }
 }
 
 function isStep(value: unknown): value is InteractionStep {
@@ -80,10 +134,13 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   const drafts = parsed.drafts
   const plans = parsed.plans
   const planDrafts = parsed.planDrafts
+  const actions = parsed.actions
+  const feedbackDraft = parsed.feedbackDraft
   const mock = parsed.mock
   const serverSnapshot = server?.serverSnapshot ?? null
   const activeThread = server?.activeThread ?? null
-  const currentStep = isStep(mock?.currentStep) ? mock.currentStep : fallback.currentStep
+  const cachedStep = isStep(mock?.currentStep) ? mock.currentStep : fallback.currentStep
+  const currentStep = cachedStep === 'feedback_submitted' ? 'action_pending' : cachedStep
   const serverStep = isStep(server?.serverStep) ? server.serverStep : fallback.serverStep
   const legacyMock = mock as Partial<DemoSessionState> | undefined
   const submittedAnswers = cachedUnderstanding?.submittedAnswers ?? legacyMock?.answers ?? {}
@@ -97,6 +154,11 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   const cachedCurrentPlan = plans?.currentPlan ?? null
   const cachedPlanVersions = plans?.planVersions ?? []
   const hasPlanCache = Boolean(cachedCurrentPlan || cachedPlanVersions.length)
+  const latestSnapshot = actions?.latestSnapshot
+    && (!serverSnapshot || actions.latestSnapshot.version >= serverSnapshot.version)
+    ? actions.latestSnapshot
+    : serverSnapshot
+  const latestActionResult = actions?.latestActionResult ?? legacyMock?.latestActionResult ?? null
   return {
     ...fallback,
     ...mock,
@@ -106,11 +168,11 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     activeThread,
     activeThreadId: activeThread?.id ?? parsed.lastThreadId ?? null,
     availableThreads: server?.availableThreads ?? [],
-    serverSnapshot,
-    snapshotId: serverSnapshot?.id ?? null,
-    snapshotVersion: serverSnapshot?.version ?? null,
-    isOfflineCache: Boolean(activeThread || serverSnapshot),
-    dataSource: activeThread || serverSnapshot ? 'cache' : 'mock',
+    serverSnapshot: latestSnapshot,
+    snapshotId: latestSnapshot?.id ?? null,
+    snapshotVersion: latestSnapshot?.version ?? null,
+    isOfflineCache: Boolean(activeThread || latestSnapshot),
+    dataSource: activeThread || latestSnapshot ? 'cache' : 'mock',
     isLoading: false,
     apiError: null,
     activeUnderstandingSession: cachedUnderstanding?.activeUnderstandingSession ?? null,
@@ -146,7 +208,25 @@ function restoreV2(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
       ...fallback.planModificationDraft,
       ...planDrafts?.planModificationDraft,
     },
-    actionFeedback: { ...fallback.actionFeedback, ...mock?.actionFeedback },
+    actionFeedback: restoreFeedbackDraft(
+      fallback.actionFeedback,
+      feedbackDraft?.actionFeedback ?? legacyMock?.actionFeedback,
+    ),
+    latestActionResult,
+    actionResultId: actions?.actionResultId ?? latestActionResult?.id ?? null,
+    actionResultStatus: actions?.actionResultStatus ?? latestActionResult?.resultStatus ?? null,
+    actionResultSubmittedAt: actions?.actionResultSubmittedAt ?? latestActionResult?.submittedAt ?? null,
+    actionResultRequestStatus: 'idle',
+    actionResultApiError: null,
+    actionResultSource: latestActionResult ? 'cache' : 'mock',
+    latestSnapshot,
+    previousSnapshot: actions?.previousSnapshot ?? null,
+    snapshotDiff: actions?.snapshotDiff ?? null,
+    latestActionHypothesis: actions?.latestActionHypothesis ?? null,
+    systemRevision: actions?.systemRevision ?? legacyMock?.systemRevision ?? null,
+    systemRevisionSource: actions?.systemRevision ? 'cache' : 'mock',
+    systemRevisionAt: actions?.systemRevisionAt ?? latestActionResult?.submittedAt ?? null,
+    systemSnapshot: latestSnapshot ?? mock?.systemSnapshot ?? fallback.systemSnapshot,
   }
 }
 
@@ -236,12 +316,25 @@ export function writeIntegrationCache(state: DemoSessionState) {
     planDrafts: {
       planModificationDraft: state.planModificationDraft,
     },
+    actions: {
+      latestActionResult: state.latestActionResult,
+      actionResultId: state.actionResultId,
+      actionResultStatus: state.actionResultStatus,
+      actionResultSubmittedAt: state.actionResultSubmittedAt,
+      latestSnapshot: state.latestSnapshot,
+      previousSnapshot: state.previousSnapshot,
+      snapshotDiff: state.snapshotDiff,
+      latestActionHypothesis: state.latestActionHypothesis,
+      systemRevision: state.systemRevision,
+      systemRevisionAt: state.systemRevisionAt,
+    },
+    feedbackDraft: {
+      actionFeedback: state.actionFeedback,
+    },
     mock: {
       currentStep: state.currentStep,
       uiThreadStatus: state.uiThreadStatus,
       uiThreadPhase: state.uiThreadPhase,
-      actionFeedback: state.actionFeedback,
-      systemRevision: state.systemRevision,
       systemSnapshot: state.systemSnapshot,
     },
   }

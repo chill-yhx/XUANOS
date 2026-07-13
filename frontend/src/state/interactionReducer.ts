@@ -1,10 +1,11 @@
 import {
   createInitialSession,
-  reviseSystem,
+  initialFeedback,
 } from '../data/interactionMock'
 import { understandingQuestions } from '../data/understandingQuestions'
 import type {
   ActiveThread,
+  ActionSubmissionResult,
   ApiErrorState,
   DemoSessionState,
   ExpressionMode,
@@ -51,8 +52,10 @@ export type InteractionAction =
   | { type: 'REOPEN_QUESTIONS' }
   | { type: 'START_ACTION' }
   | { type: 'UPDATE_FEEDBACK_DRAFT'; value: Partial<FeedbackPayload> }
-  | { type: 'SUBMIT_FEEDBACK' }
-  | { type: 'APPLY_SYSTEM_REVISION' }
+  | { type: 'ACTION_RESULT_REQUEST_STARTED' }
+  | { type: 'ACTION_RESULT_SUCCEEDED'; result: ActionSubmissionResult }
+  | { type: 'ACTION_RESULT_REQUEST_FAILED'; error: ApiErrorState }
+  | { type: 'ACTION_RESULT_READBACK_FAILED'; error: ApiErrorState }
   | { type: 'ADD_SYSTEM_CORRECTION'; action: string; section: SystemSection }
   | { type: 'RESET_DEMO_DATA' }
 
@@ -104,6 +107,8 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         dataSource: state.serverSnapshot || state.activeThread ? 'cache' : 'mock',
         understandingSource: state.serverUnderstanding ? 'cache' : state.understandingSource,
         planSource: state.currentPlan && state.planSource !== 'mock' ? 'cache' : state.planSource,
+        actionResultSource: state.latestActionResult ? 'cache' : state.actionResultSource,
+        systemRevisionSource: state.systemRevision ? 'cache' : state.systemRevisionSource,
       }
 
     case 'API_SYNC_COMPLETED':
@@ -166,6 +171,21 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
           userChoice: '',
           expectedImpactAcknowledged: false,
         },
+        actionFeedback: { ...initialFeedback },
+        latestActionResult: null,
+        actionResultId: null,
+        actionResultStatus: null,
+        actionResultSubmittedAt: null,
+        actionResultRequestStatus: 'idle',
+        actionResultApiError: null,
+        actionResultSource: 'mock',
+        latestSnapshot: null,
+        previousSnapshot: null,
+        snapshotDiff: null,
+        latestActionHypothesis: null,
+        systemRevision: null,
+        systemRevisionSource: 'mock',
+        systemRevisionAt: null,
         isLoading: false,
         apiError: null,
         isOfflineCache: false,
@@ -181,13 +201,35 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
       const serverUnderstanding = useServerWorkflow ? aggregate.understanding : state.serverUnderstanding
       const preserveAnswerDraft = sameThread
         && state.currentQuestionIndex === aggregate.currentQuestionIndex
+      const sameActionResult = Boolean(
+        aggregate.latestActionResult
+        && aggregate.latestActionResult.id === state.latestActionResult?.id,
+      )
+      const latestActionResult = sameActionResult
+        && aggregate.latestActionResult
+        && state.latestActionResult
+        ? {
+            ...aggregate.latestActionResult,
+            resultStatus: state.latestActionResult.resultStatus,
+            planItemId: state.latestActionResult.planItemId,
+            actionIdentifier: state.latestActionResult.actionIdentifier,
+          }
+        : aggregate.latestActionResult
+      const preserveFeedbackDraft = Boolean(
+        sameThread
+        && state.currentStep === 'action_pending'
+        && aggregate.currentPlan?.status === 'accepted'
+        && state.actionFeedback.planId === aggregate.currentPlan.id,
+      )
       return {
         ...state,
         activeThread: aggregate.thread,
         activeThreadId: aggregate.thread.id,
         availableThreads: mergeThread(state.availableThreads, aggregate.thread),
         serverStep: aggregate.serverStep,
-        currentStep: preserveLocalMock ? state.currentStep : aggregate.serverStep,
+        currentStep: preserveFeedbackDraft
+          ? 'action_pending'
+          : preserveLocalMock ? state.currentStep : aggregate.serverStep,
         uiThreadStatus: preserveLocalMock ? state.uiThreadStatus : aggregate.thread.status,
         uiThreadPhase: preserveLocalMock ? state.uiThreadPhase : aggregate.thread.phase,
         activeUnderstandingSession: useServerWorkflow
@@ -241,11 +283,24 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
             ? state.lastViewedPlanId
             : aggregate.currentPlan.id
           : state.lastViewedPlanId,
-        latestActionResult: aggregate.latestActionResult,
+        latestActionResult,
         systemRevision: useServerWorkflow ? aggregate.systemRevision : state.systemRevision,
+        actionResultId: latestActionResult?.id ?? null,
+        actionResultStatus: latestActionResult?.resultStatus ?? null,
+        actionResultSubmittedAt: latestActionResult?.submittedAt ?? null,
+        actionResultRequestStatus: latestActionResult ? 'success' : 'idle',
+        actionResultApiError: null,
+        actionResultSource: latestActionResult ? 'api' : state.actionResultSource,
+        latestSnapshot: aggregate.snapshot,
+        previousSnapshot: sameActionResult ? state.previousSnapshot : null,
+        snapshotDiff: sameActionResult ? state.snapshotDiff : null,
+        latestActionHypothesis: sameActionResult ? state.latestActionHypothesis : null,
+        systemRevisionSource: aggregate.systemRevision ? 'api' : state.systemRevisionSource,
+        systemRevisionAt: latestActionResult?.submittedAt ?? state.systemRevisionAt,
         serverSnapshot: aggregate.snapshot,
         snapshotId: aggregate.snapshot.id,
         snapshotVersion: aggregate.snapshot.version,
+        systemSnapshot: aggregate.snapshot,
         apiError: null,
         isOfflineCache: false,
         dataSource: 'api',
@@ -259,6 +314,8 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         serverSnapshot: action.snapshot,
         snapshotId: action.snapshot.id,
         snapshotVersion: action.snapshot.version,
+        latestSnapshot: action.snapshot,
+        systemSnapshot: action.snapshot,
         apiError: null,
         isOfflineCache: false,
         dataSource: 'api',
@@ -379,6 +436,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
           snapshotId: result.snapshot?.id ?? state.snapshotId,
           snapshotVersion: result.snapshot?.version ?? state.snapshotVersion,
           systemSnapshot: result.snapshot ?? state.systemSnapshot,
+          latestSnapshot: result.snapshot ?? state.latestSnapshot,
           isOfflineCache: false,
           dataSource: 'api',
           apiError: null,
@@ -505,6 +563,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
           snapshotId: snapshot.id,
           snapshotVersion: snapshot.version,
           systemSnapshot: snapshot,
+          latestSnapshot: snapshot,
           isOfflineCache: false,
           dataSource: 'api',
           apiError: null,
@@ -557,41 +616,114 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
     case 'START_ACTION':
       if (
         state.currentPlan?.status !== 'accepted'
-        || state.serverStep !== 'plan_accepted'
+        || !['plan_accepted', 'system_revised'].includes(state.serverStep)
         || state.planSource !== 'api'
         || state.isOfflineCache
       ) return state
-      return withThread(
-        { ...state, currentStep: 'action_pending' },
-        '等待行动反馈',
-        state.currentPlan.stage,
-      )
+      {
+        const actionItem = state.currentPlan.items?.find((item) => item.itemType === 'action')
+        return withThread(
+          {
+            ...state,
+            currentStep: 'action_pending',
+            actionFeedback: {
+              ...initialFeedback,
+              planId: state.currentPlan.id,
+              planItemId: actionItem?.id ?? null,
+              actionIdentifier: actionItem?.id ?? state.currentPlan.singleAction,
+            },
+            actionResultRequestStatus: 'idle',
+            actionResultApiError: null,
+          },
+          '等待行动反馈',
+          state.currentPlan.stage,
+        )
+      }
 
     case 'UPDATE_FEEDBACK_DRAFT':
       return { ...state, actionFeedback: { ...state.actionFeedback, ...action.value } }
 
-    case 'SUBMIT_FEEDBACK':
-      if (state.currentStep !== 'action_pending' || state.currentPlan?.status !== 'accepted') return state
-      return withThread(
-        { ...state, currentStep: 'feedback_submitted' },
-        '正在修正系统',
-        '处理行动结果',
-      )
+    case 'ACTION_RESULT_REQUEST_STARTED':
+      return {
+        ...state,
+        currentStep: 'feedback_submitted',
+        actionResultRequestStatus: 'loading',
+        actionResultApiError: null,
+      }
 
-    case 'APPLY_SYSTEM_REVISION': {
-      if (state.currentStep !== 'feedback_submitted' || !state.currentPlan) return state
-      const { snapshot, revision } = reviseSystem(state.systemSnapshot, state.actionFeedback, state.currentPlan)
+    case 'ACTION_RESULT_SUCCEEDED': {
+      const { result } = action
+      const snapshot = result.snapshot
+      const threadState = updateThreadStep(state, result.currentStep)
+      const activeThread = threadState.activeThread
+        ? {
+            ...threadState.activeThread,
+            status: 'active',
+            phase: snapshot.currentStage,
+          }
+        : null
       return withThread(
         {
           ...state,
+          ...threadState,
+          activeThread,
+          availableThreads: activeThread
+            ? mergeThread(threadState.availableThreads, activeThread)
+            : threadState.availableThreads,
+          currentStep: result.currentStep,
+          serverStep: result.currentStep,
+          latestActionResult: result.actionResult,
+          actionResultId: result.actionResult.id,
+          actionResultStatus: result.actionResult.resultStatus,
+          actionResultSubmittedAt: result.actionResult.submittedAt,
+          actionResultRequestStatus: 'success',
+          actionResultApiError: null,
+          actionResultSource: 'api',
+          actionFeedback: {
+            ...initialFeedback,
+            planId: result.actionResult.planId,
+            planItemId: result.actionResult.planItemId,
+            actionIdentifier: result.actionResult.actionIdentifier,
+          },
+          previousSnapshot: result.previousSnapshot,
+          latestSnapshot: snapshot,
+          snapshotDiff: result.snapshotDiff,
+          latestActionHypothesis: result.hypothesis,
+          serverSnapshot: snapshot,
+          snapshotId: snapshot.id,
+          snapshotVersion: snapshot.version,
           systemSnapshot: snapshot,
-          systemRevision: revision,
-          currentStep: 'system_revised',
+          systemRevision: result.systemRevision,
+          systemRevisionSource: 'api',
+          systemRevisionAt: result.actionResult.submittedAt,
+          isOfflineCache: false,
+          dataSource: 'api',
+          apiError: null,
         },
         '系统已修正',
         snapshot.currentStage,
       )
     }
+
+    case 'ACTION_RESULT_REQUEST_FAILED': {
+      const offline = ['NETWORK_ERROR', 'TIMEOUT'].includes(action.error.code)
+      return {
+        ...state,
+        currentStep: 'action_pending',
+        actionResultRequestStatus: 'error',
+        actionResultApiError: action.error,
+        actionResultSource: offline && state.latestActionResult ? 'cache' : state.actionResultSource,
+        systemRevisionSource: offline && state.systemRevision ? 'cache' : state.systemRevisionSource,
+        isOfflineCache: offline && Boolean(state.activeThread || state.latestSnapshot),
+      }
+    }
+
+    case 'ACTION_RESULT_READBACK_FAILED':
+      return {
+        ...state,
+        actionResultRequestStatus: 'success',
+        actionResultApiError: action.error,
+      }
 
     case 'ADD_SYSTEM_CORRECTION': {
       const correction = `${action.section.title}：${action.action}`
