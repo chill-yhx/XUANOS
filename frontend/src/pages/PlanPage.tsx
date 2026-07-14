@@ -57,6 +57,9 @@ export function PlanPage({ onNavigate }: PageProps) {
   const isViewingCurrent = displayedPlan.id === currentPlan.id
   const accepted = currentPlan.status === 'accepted'
   const draft = state.planModificationDraft
+  const planErrorMessage = state.planApiError?.code === 'INVALID_FLOW_STATE'
+    ? '当前计划状态已经变化，请同步最新计划后再操作。'
+    : state.planApiError?.message
 
   const enterAction = () => {
     dispatch({ type: 'START_ACTION' })
@@ -102,7 +105,7 @@ export function PlanPage({ onNavigate }: PageProps) {
       )}
       {state.planApiError && (
         <>
-          <WarningBanner tone="impact">{state.planApiError.message}</WarningBanner>
+          <WarningBanner tone="impact">{planErrorMessage}</WarningBanner>
           {!isOffline && (
             <div>
               <SecondaryButton onClick={() => void refreshActiveThread()} disabled={isLoading}>

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import type { ApiErrorState, CorrectionTarget, DemoSessionState, SystemSnapshot } from '../types'
+import type {
+  ActiveThread,
+  ApiErrorState,
+  CorrectionTarget,
+  DemoSessionState,
+  PlanVersion,
+  SystemSnapshot,
+  ThreadAggregateState,
+} from '../types'
 import { createInitialSession } from './initialState'
 import { interactionReducer } from './interactionReducer'
 
@@ -13,6 +21,68 @@ function snapshot(id: string, version: number): SystemSnapshot {
     currentVector: version === 1 ? '旧主线' : '最新主线',
     createdAt: `2026-07-14T00:0${version}:00Z`,
     updatedAt: `2026-07-14T00:0${version}:00Z`,
+  }
+}
+
+function acceptedPlan(): PlanVersion {
+  return {
+    id: 'plan-v2',
+    rootPlanId: 'plan-v1',
+    previousPlanId: 'plan-v1',
+    version: 2,
+    status: 'accepted',
+    mainGoal: 'Complete the workflow',
+    maintenanceGoals: [],
+    pausedGoals: [],
+    removedItems: [],
+    stage: 'Execution',
+    singleAction: 'Run the acceptance test',
+    completionStandard: 'The test passes',
+    reviewCondition: 'Review after feedback',
+    workload: 'medium',
+    systemRecommendation: 'Keep the accepted plan active',
+    isUserFinalChoice: false,
+    acceptedAt: '2026-07-14T01:00:00Z',
+    createdAt: '2026-07-14T00:00:00Z',
+    updatedAt: '2026-07-14T01:00:00Z',
+  }
+}
+
+function activeThread(currentStep: ActiveThread['currentStep']): ActiveThread {
+  return {
+    id: 'thread-1',
+    userId: 'test-user',
+    title: 'Workflow state test',
+    status: 'active',
+    currentStep,
+    phase: 'Execution',
+    activeUnderstandingSessionId: 'understanding-1',
+    activePlanId: 'plan-v2',
+    lastActivityAt: '2026-07-14T01:00:00Z',
+    createdAt: '2026-07-14T00:00:00Z',
+    updatedAt: '2026-07-14T01:00:00Z',
+  }
+}
+
+function threadAggregate(serverStep: ThreadAggregateState['serverStep']): ThreadAggregateState {
+  const plan = acceptedPlan()
+  return {
+    thread: activeThread(serverStep),
+    serverStep,
+    activeUnderstandingSession: null,
+    expressionMode: null,
+    userInput: '',
+    answers: {},
+    answerMeta: {},
+    currentQuestionIndex: 3,
+    currentQuestion: null,
+    understanding: null,
+    corrections: [],
+    currentPlan: plan,
+    planVersions: [plan],
+    latestActionResult: null,
+    systemRevision: null,
+    snapshot: snapshot('snapshot-v2', 2),
   }
 }
 
@@ -75,5 +145,108 @@ describe('correction stale snapshot recovery', () => {
     expect(state.correctionReason).toBe('基于当时看到的状态')
     expect(state.correctionType).toBe('partial')
     expect(state.correctionApiError).toBeNull()
+  })
+})
+
+describe('plan workflow monotonicity', () => {
+  it('does not let an earlier aggregate server step overwrite a later step for the same thread', () => {
+    const thread = activeThread('system_revised')
+    const state: DemoSessionState = {
+      ...createInitialSession(),
+      activeThreadId: thread.id,
+      activeThread: thread,
+      currentStep: 'system_revised',
+      serverStep: 'system_revised',
+      currentPlan: acceptedPlan(),
+      activePlanId: 'plan-v2',
+      planSource: 'api',
+      dataSource: 'api',
+      isOfflineCache: false,
+    }
+
+    const next = interactionReducer(state, {
+      type: 'THREAD_AGGREGATE_LOADED',
+      aggregate: threadAggregate('action_pending'),
+    })
+
+    expect(next.serverStep).toBe('system_revised')
+    expect(next.currentStep).toBe('system_revised')
+    expect(next.activeThread?.currentStep).toBe('system_revised')
+  })
+
+  it('lets a fresh aggregate replace a later step restored only from offline cache', () => {
+    const thread = activeThread('system_revised')
+    const state: DemoSessionState = {
+      ...createInitialSession(),
+      activeThreadId: thread.id,
+      activeThread: thread,
+      currentStep: 'system_revised',
+      serverStep: 'system_revised',
+      dataSource: 'cache',
+      isOfflineCache: true,
+    }
+
+    const next = interactionReducer(state, {
+      type: 'THREAD_AGGREGATE_LOADED',
+      aggregate: threadAggregate('action_pending'),
+    })
+
+    expect(next.serverStep).toBe('action_pending')
+    expect(next.currentStep).toBe('action_pending')
+    expect(next.dataSource).toBe('api')
+  })
+
+  it('treats an older repeated accept response as recovery without regressing accepted state', () => {
+    const plan = acceptedPlan()
+    const revisedSnapshot = snapshot('snapshot-v3', 3)
+    const state: DemoSessionState = {
+      ...createInitialSession(),
+      currentStep: 'action_pending',
+      serverStep: 'action_pending',
+      currentPlan: plan,
+      planVersions: [plan],
+      activePlanId: plan.id,
+      planSource: 'api',
+      serverSnapshot: revisedSnapshot,
+      latestSnapshot: revisedSnapshot,
+      systemSnapshot: revisedSnapshot,
+    }
+
+    const next = interactionReducer(state, {
+      type: 'PLAN_ACCEPT_SUCCEEDED',
+      result: {
+        plan,
+        snapshot: snapshot('snapshot-v2', 2),
+        currentStep: 'plan_accepted',
+      },
+    })
+
+    expect(next.serverStep).toBe('action_pending')
+    expect(next.currentStep).toBe('action_pending')
+    expect(next.currentPlan?.acceptedAt).toBe(plan.acceptedAt)
+    expect(next.latestSnapshot?.id).toBe(revisedSnapshot.id)
+    expect(next.snapshotVersion).toBe(revisedSnapshot.version)
+  })
+
+  it('keeps UI and server steps unchanged when accept fails with INVALID_FLOW_STATE', () => {
+    const state: DemoSessionState = {
+      ...createInitialSession(),
+      currentStep: 'plan_modified',
+      serverStep: 'plan_modified',
+      planRequestStatus: 'loading',
+    }
+    const error: ApiErrorState = {
+      code: 'INVALID_FLOW_STATE',
+      message: 'The plan is no longer active.',
+      status: 409,
+      requestId: 'request-invalid-plan',
+    }
+
+    const next = interactionReducer(state, { type: 'PLAN_REQUEST_FAILED', error })
+
+    expect(next.currentStep).toBe('plan_modified')
+    expect(next.serverStep).toBe('plan_modified')
+    expect(next.planRequestStatus).toBe('error')
+    expect(next.planApiError?.code).toBe('INVALID_FLOW_STATE')
   })
 })

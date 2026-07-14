@@ -21,6 +21,7 @@ import type {
   UserCorrectionResult,
 } from '../types'
 import { createInitialSession, initialFeedback } from './initialState'
+import { laterInteractionStep } from './workflowSteps'
 
 export type InteractionAction =
   | { type: 'AUTH_SESSION_INVALIDATED'; error: ApiErrorState }
@@ -224,7 +225,14 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
     case 'THREAD_AGGREGATE_LOADED': {
       const aggregate = action.aggregate
       const sameThread = state.activeThreadId === aggregate.thread.id
-      const useServerWorkflow = aggregate.serverStep !== 'idle'
+      const hasLiveServerState = sameThread && state.dataSource === 'api' && !state.isOfflineCache
+      const serverStep = hasLiveServerState
+        ? laterInteractionStep(state.serverStep, aggregate.serverStep)
+        : aggregate.serverStep
+      const thread = serverStep === aggregate.thread.currentStep
+        ? aggregate.thread
+        : { ...aggregate.thread, currentStep: serverStep }
+      const useServerWorkflow = serverStep !== 'idle'
       const preserveLocalDraft = sameThread && !useServerWorkflow
       const activeSession = aggregate.activeUnderstandingSession
       const serverUnderstanding = useServerWorkflow ? aggregate.understanding : state.serverUnderstanding
@@ -258,13 +266,13 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
       const preserveSnapshotComparison = sameActionResult || sameCorrectionSnapshot
       return {
         ...state,
-        activeThread: aggregate.thread,
-        activeThreadId: aggregate.thread.id,
-        availableThreads: mergeThread(state.availableThreads, aggregate.thread),
-        serverStep: aggregate.serverStep,
+        activeThread: thread,
+        activeThreadId: thread.id,
+        availableThreads: mergeThread(state.availableThreads, thread),
+        serverStep,
         currentStep: preserveFeedbackDraft
           ? 'action_pending'
-          : preserveLocalDraft ? state.currentStep : aggregate.serverStep,
+          : preserveLocalDraft ? state.currentStep : serverStep,
         uiThreadStatus: preserveLocalDraft ? state.uiThreadStatus : aggregate.thread.status,
         uiThreadPhase: preserveLocalDraft ? state.uiThreadPhase : aggregate.thread.phase,
         activeUnderstandingSession: useServerWorkflow
@@ -306,7 +314,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         corrections: useServerWorkflow ? aggregate.corrections : state.corrections,
         currentPlan: useServerWorkflow ? aggregate.currentPlan : state.currentPlan,
         planVersions: useServerWorkflow ? aggregate.planVersions : state.planVersions,
-        activePlanId: useServerWorkflow ? aggregate.thread.activePlanId : state.activePlanId,
+        activePlanId: useServerWorkflow ? thread.activePlanId : state.activePlanId,
         planRequestStatus: useServerWorkflow && aggregate.currentPlan ? 'success' : state.planRequestStatus,
         planApiError: null,
         planSource: useServerWorkflow && aggregate.currentPlan ? 'api' : state.planSource,
@@ -589,13 +597,18 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
 
     case 'PLAN_ACCEPT_SUCCEEDED': {
       const { plan, snapshot, currentStep } = action.result
-      const threadState = updateThreadStep(state, currentStep, state.understandingSessionId, plan.id)
+      const serverStep = laterInteractionStep(state.serverStep, currentStep)
+      const uiStep = laterInteractionStep(state.currentStep, serverStep)
+      const latestSnapshot = state.latestSnapshot && state.latestSnapshot.version >= snapshot.version
+        ? state.latestSnapshot
+        : snapshot
+      const threadState = updateThreadStep(state, serverStep, state.understandingSessionId, plan.id)
       return withThread(
         {
           ...state,
           ...threadState,
-          currentStep,
-          serverStep: currentStep,
+          currentStep: uiStep,
+          serverStep,
           currentPlan: plan,
           planVersions: mergePlans(state.planVersions, plan),
           activePlanId: plan.id,
@@ -604,11 +617,11 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
           planSource: 'api',
           lastSuccessfulPlanAt: plan.updatedAt ?? plan.createdAt,
           lastViewedPlanId: plan.id,
-          serverSnapshot: snapshot,
-          snapshotId: snapshot.id,
-          snapshotVersion: snapshot.version,
-          systemSnapshot: snapshot,
-          latestSnapshot: snapshot,
+          serverSnapshot: latestSnapshot,
+          snapshotId: latestSnapshot.id,
+          snapshotVersion: latestSnapshot.version,
+          systemSnapshot: latestSnapshot,
+          latestSnapshot,
           isOfflineCache: false,
           dataSource: 'api',
           apiError: null,
@@ -661,7 +674,7 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
     case 'START_ACTION':
       if (
         state.currentPlan?.status !== 'accepted'
-        || !['plan_accepted', 'system_revised'].includes(state.serverStep)
+        || !['plan_accepted', 'action_pending', 'system_revised'].includes(state.serverStep)
         || state.planSource !== 'api'
         || state.isOfflineCache
       ) return state

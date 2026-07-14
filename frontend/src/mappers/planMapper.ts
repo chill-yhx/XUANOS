@@ -33,6 +33,9 @@ const planSteps = new Set<InteractionStep>([
   'plan_generated',
   'plan_modified',
   'plan_accepted',
+  'action_pending',
+  'feedback_submitted',
+  'system_revised',
 ])
 
 function planStepMapper(value: string, fallback: InteractionStep): InteractionStep {

@@ -11,6 +11,11 @@ from app.models.plan import Plan, PlanItem
 from app.models.understanding import UserCorrection
 from app.repositories.workflow import WorkflowRepository
 from app.rules.plan_mock import generate_plan, modification_impact
+from app.rules.workflow_steps import (
+    advance_workflow_step,
+    is_known_workflow_step,
+    later_workflow_step,
+)
 from app.schemas.plan import (
     PlanAcceptRequest,
     PlanAcceptResult,
@@ -78,7 +83,7 @@ class PlanService:
         for item in decision.items:
             self.session.add(PlanItem(plan_id=plan.id, goal_id=goal.id, **item))
         thread.active_plan_id = plan.id
-        thread.current_step = "plan_generated"
+        thread.current_step = advance_workflow_step(thread.current_step, "plan_generated")
         thread.phase = "计划裁决"
         thread.last_activity_at = datetime.now(UTC)
         SnapshotService(self.session, self.user_id).create_version(
@@ -113,7 +118,7 @@ class PlanService:
                 "计划版本已变化，请读取最新版本后重试。",
                 {"active_plan_id": thread.active_plan_id},
             )
-        if previous.status not in {"generated", "accepted"}:
+        if previous.status != "generated" or thread.current_step not in {"plan_generated", "plan_modified"}:
             raise APIError(status.HTTP_409_CONFLICT, "INVALID_FLOW_STATE", "当前计划状态不允许修改。")
         if not payload.expected_impact_acknowledged:
             raise APIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "VALIDATION_ERROR", "必须确认预计影响。")
@@ -178,7 +183,7 @@ class PlanService:
         )
         self.session.add(correction)
         thread.active_plan_id = current.id
-        thread.current_step = "plan_modified"
+        thread.current_step = advance_workflow_step(thread.current_step, "plan_modified")
         thread.phase = "等待接受"
         thread.last_activity_at = datetime.now(UTC)
         SnapshotService(self.session, self.user_id).create_version(
@@ -209,29 +214,60 @@ class PlanService:
         )
         if replay := manager.replay():
             return replay
-        plan = self._plan(plan_id)
-        thread = self._thread(plan.thread_id)
-        if thread.active_plan_id != plan.id or plan.version != payload.expected_version:
+        plan = self._plan(plan_id, for_update=True)
+        thread = self._thread(plan.thread_id, for_update=True)
+        if plan.status == "superseded" or thread.active_plan_id != plan.id:
+            raise APIError(
+                status.HTTP_409_CONFLICT,
+                "INVALID_FLOW_STATE",
+                "只能接受当前有效计划。",
+                {"active_plan_id": thread.active_plan_id},
+            )
+        if plan.version != payload.expected_version:
             raise APIError(status.HTTP_409_CONFLICT, "VERSION_CONFLICT", "只能接受当前计划版本。")
         if plan.status not in {"generated", "accepted"}:
             raise APIError(status.HTTP_409_CONFLICT, "INVALID_FLOW_STATE", "当前计划状态不允许接受。")
 
         if plan.status == "accepted":
+            if plan.accepted_at is None or not is_known_workflow_step(thread.current_step):
+                raise APIError(
+                    status.HTTP_409_CONFLICT,
+                    "INVALID_FLOW_STATE",
+                    "已接受计划的持久化状态不完整。",
+                )
+            current_step = later_workflow_step(thread.current_step, "action_pending")
+            if current_step != thread.current_step:
+                thread.current_step = current_step
+                thread.status = "waiting_action"
+                thread.last_activity_at = datetime.now(UTC)
             snapshot = SnapshotService(self.session, self.user_id).get_current()
             result = PlanAcceptResult(
                 plan=self._plan_read(plan),
                 snapshot=SnapshotRead.model_validate(snapshot),
-                current_step="plan_accepted",
+                current_step=current_step,
             )
             data = result.model_dump(mode="json")
             manager.store("plan", plan.id, data)
-            self.session.commit()
+            try:
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
+                raise
             return data
+
+        if thread.current_step not in {"plan_generated", "plan_modified"}:
+            raise APIError(
+                status.HTTP_409_CONFLICT,
+                "INVALID_FLOW_STATE",
+                "当前线程步骤不允许接受计划。",
+                {"current_step": thread.current_step},
+            )
 
         plan.status = "accepted"
         plan.accepted_at = plan.accepted_at or datetime.now(UTC)
         thread.status = "waiting_action"
-        thread.current_step = "plan_accepted"
+        accepted_step = advance_workflow_step(thread.current_step, "plan_accepted")
+        thread.current_step = advance_workflow_step(accepted_step, "action_pending")
         thread.phase = plan.stage
         thread.last_activity_at = datetime.now(UTC)
         snapshot = SnapshotService(self.session, self.user_id).create_version(
@@ -246,21 +282,27 @@ class PlanService:
         result = PlanAcceptResult(
             plan=self._plan_read(plan),
             snapshot=SnapshotRead.model_validate(snapshot),
-            current_step="plan_accepted",
+            current_step=thread.current_step,
         )
         data = result.model_dump(mode="json")
         manager.store("plan", plan.id, data)
-        self.session.commit()
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
         return data
 
-    def _thread(self, thread_id: str):
-        thread = self.workflow.get_thread(thread_id, self.user_id)
+    def _thread(self, thread_id: str, *, for_update: bool = False):
+        getter = self.workflow.get_thread_for_update if for_update else self.workflow.get_thread
+        thread = getter(thread_id, self.user_id)
         if thread is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "任务线程不存在。")
         return thread
 
-    def _plan(self, plan_id: str) -> Plan:
-        plan = self.workflow.get_plan(plan_id, self.user_id)
+    def _plan(self, plan_id: str, *, for_update: bool = False) -> Plan:
+        getter = self.workflow.get_plan_for_update if for_update else self.workflow.get_plan
+        plan = getter(plan_id, self.user_id)
         if plan is None:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "计划不存在。")
         return plan

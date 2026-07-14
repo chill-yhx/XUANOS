@@ -17,6 +17,11 @@ class WorkflowRepository:
     def get_thread(self, thread_id: str, user_id: str) -> Thread | None:
         return self.session.scalar(select(Thread).where(Thread.id == thread_id, Thread.user_id == user_id))
 
+    def get_thread_for_update(self, thread_id: str, user_id: str) -> Thread | None:
+        return self.session.scalar(
+            select(Thread).where(Thread.id == thread_id, Thread.user_id == user_id).with_for_update()
+        )
+
     def get_understanding(self, session_id: str, user_id: str) -> UnderstandingSession | None:
         return self.session.scalar(
             select(UnderstandingSession).where(
@@ -52,6 +57,9 @@ class WorkflowRepository:
 
     def get_plan(self, plan_id: str, user_id: str) -> Plan | None:
         return self.session.scalar(select(Plan).where(Plan.id == plan_id, Plan.user_id == user_id))
+
+    def get_plan_for_update(self, plan_id: str, user_id: str) -> Plan | None:
+        return self.session.scalar(select(Plan).where(Plan.id == plan_id, Plan.user_id == user_id).with_for_update())
 
     def plan_items(self, plan_id: str) -> list[PlanItem]:
         return list(

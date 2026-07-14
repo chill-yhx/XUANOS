@@ -8,6 +8,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models.action_result import ActionResult
 from app.models.hypothesis import Hypothesis
+from app.models.idempotency import IdempotencyRecord
 from app.models.plan import Plan
 from app.models.snapshot import UserSnapshot
 from app.models.thread import Thread
@@ -143,7 +144,7 @@ def accept_plan(client: TestClient, context: FlowContext, key_prefix: str) -> di
     assert accepted.status_code == 200
     data = accepted.json()["data"]
     assert data["plan"]["status"] == "accepted"
-    assert data["current_step"] == "plan_accepted"
+    assert data["current_step"] == "action_pending"
     return data
 
 
@@ -162,8 +163,17 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     create_and_revise_plan(client, context, "full-flow")
     accepted = accept_plan(client, context, "full-flow")
     snapshot_before_feedback = accepted["snapshot"]["version"]
+    accepted_at = accepted["plan"]["accepted_at"]
     assert context.plan_v1_id is not None
     assert context.plan_v2_id is not None
+
+    accepted_replay = client.post(
+        f"/api/plans/{context.plan_v2_id}/accept",
+        headers=idempotency("full-flow-accept"),
+        json={"expected_version": 2},
+    )
+    assert accepted_replay.status_code == 200
+    assert accepted_replay.json()["data"] == accepted
 
     accepted_again = client.post(
         f"/api/plans/{context.plan_v2_id}/accept",
@@ -172,6 +182,21 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     )
     assert accepted_again.status_code == 200
     assert accepted_again.json()["data"]["snapshot"]["id"] == accepted["snapshot"]["id"]
+    assert accepted_again.json()["data"]["plan"]["accepted_at"].removesuffix("Z") == accepted_at.removesuffix("Z")
+    assert accepted_again.json()["data"]["current_step"] == "action_pending"
+
+    superseded = client.post(
+        f"/api/plans/{context.plan_v1_id}/accept",
+        headers=idempotency("full-flow-accept-superseded-v1"),
+        json={"expected_version": 1},
+    )
+    assert superseded.status_code == 409
+    assert superseded.json()["error"]["code"] == "INVALID_FLOW_STATE"
+
+    before_feedback = client.get(f"/api/threads/{context.thread_id}").json()["data"]
+    assert before_feedback["thread"]["active_plan_id"] == context.plan_v2_id
+    assert before_feedback["thread"]["current_step"] == "action_pending"
+    assert before_feedback["current_plan"]["id"] == context.plan_v2_id
 
     payload = {
         "thread_id": context.thread_id,
@@ -196,6 +221,17 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     assert result["snapshot"]["source_action_result_id"] == result["action_result"]["id"]
     assert result["hypothesis"]["supporting_evidence"]
 
+    accepted_after_feedback = client.post(
+        f"/api/plans/{context.plan_v2_id}/accept",
+        headers=idempotency("full-flow-accept-after-feedback"),
+        json={"expected_version": 2},
+    )
+    assert accepted_after_feedback.status_code == 200
+    after_feedback_data = accepted_after_feedback.json()["data"]
+    assert after_feedback_data["current_step"] == "system_revised"
+    assert after_feedback_data["plan"]["accepted_at"].removesuffix("Z") == accepted_at.removesuffix("Z")
+    assert after_feedback_data["snapshot"]["id"] == result["snapshot"]["id"]
+
     replayed = client.post(
         "/api/action-results",
         headers=idempotency("full-flow-action-result"),
@@ -217,6 +253,13 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     with SessionLocal() as session:
         assert session.scalar(select(func.count(ActionResult.id))) == 1
         assert session.scalar(select(func.count(UserSnapshot.id))) == result["snapshot"]["version"]
+        replay_record_count = session.scalar(
+            select(func.count(IdempotencyRecord.id)).where(
+                IdempotencyRecord.route == f"POST /api/plans/{context.plan_v2_id}/accept",
+                IdempotencyRecord.key == "full-flow-accept",
+            )
+        )
+        assert replay_record_count == 1
         plans = list(session.scalars(select(Plan).order_by(Plan.version)))
         assert len(plans) == 2
         assert plans[0].id == context.plan_v1_id
@@ -237,6 +280,10 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     detail = client.get(f"/api/threads/{context.thread_id}")
     aggregate = detail.json()["data"]
     assert len(aggregate["plan_versions"]) == 2
+    assert aggregate["thread"]["active_plan_id"] == context.plan_v2_id
+    assert aggregate["thread"]["current_step"] == "system_revised"
+    assert aggregate["current_plan"]["id"] == context.plan_v2_id
+    assert aggregate["current_plan"]["status"] == "accepted"
     assert aggregate["latest_action_result"]["id"] == result["action_result"]["id"]
     assert aggregate["current_snapshot"]["id"] == result["snapshot"]["id"]
 
@@ -270,6 +317,47 @@ def test_feedback_requires_accepted_plan(client: TestClient) -> None:
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "PLAN_NOT_ACCEPTED"
+
+
+def test_thread_aggregate_safely_derives_legacy_accepted_step(client: TestClient) -> None:
+    context = analyze_understanding(client, create_thread(client, "旧状态恢复测试"), "legacy-accept")
+    confirm_understanding(client, context, "legacy-accept")
+    created = client.post(
+        "/api/plans",
+        headers=idempotency("legacy-accept-plan"),
+        json={"thread_id": context.thread_id, "understanding_session_id": context.understanding_session_id},
+    )
+    plan = created.json()["data"]["plan"]
+    accepted = client.post(
+        f"/api/plans/{plan['id']}/accept",
+        headers=idempotency("legacy-accept-first"),
+        json={"expected_version": plan["version"]},
+    )
+    assert accepted.status_code == 200
+
+    with SessionLocal() as session:
+        thread = session.get(Thread, context.thread_id)
+        assert thread is not None
+        thread.current_step = "plan_accepted"
+        session.commit()
+
+    aggregate = client.get(f"/api/threads/{context.thread_id}")
+    assert aggregate.status_code == 200
+    assert aggregate.json()["data"]["thread"]["current_step"] == "action_pending"
+    assert aggregate.json()["data"]["thread"]["active_plan_id"] == plan["id"]
+
+    replay_with_new_key = client.post(
+        f"/api/plans/{plan['id']}/accept",
+        headers=idempotency("legacy-accept-repair"),
+        json={"expected_version": plan["version"]},
+    )
+    assert replay_with_new_key.status_code == 200
+    assert replay_with_new_key.json()["data"]["current_step"] == "action_pending"
+
+    with SessionLocal() as session:
+        thread = session.get(Thread, context.thread_id)
+        assert thread is not None
+        assert thread.current_step == "action_pending"
 
 
 def test_answer_revision_is_append_only(client: TestClient) -> None:
@@ -316,6 +404,56 @@ def test_answer_revision_is_append_only(client: TestClient) -> None:
         )
     assert [answer.answer_text for answer in answers] == ["第一版目标", "第二版目标"]
     assert [answer.is_current for answer in answers] == [False, True]
+
+
+def test_plan_accept_transaction_rolls_back_when_snapshot_fails(client: TestClient, monkeypatch) -> None:
+    context = analyze_understanding(client, create_thread(client, "计划接受回滚测试"), "accept-rollback")
+    confirm_understanding(client, context, "accept-rollback")
+    created = client.post(
+        "/api/plans",
+        headers=idempotency("accept-rollback-plan"),
+        json={"thread_id": context.thread_id, "understanding_session_id": context.understanding_session_id},
+    )
+    plan_id = created.json()["data"]["plan"]["id"]
+    with SessionLocal() as session:
+        snapshot_count_before = session.scalar(select(func.count(UserSnapshot.id)))
+
+    def fail_snapshot(*args, **kwargs):
+        raise RuntimeError("forced snapshot failure")
+
+    monkeypatch.setattr(SnapshotService, "create_version", fail_snapshot)
+    with TestClient(
+        app,
+        headers={"Authorization": client.headers["Authorization"]},
+        raise_server_exceptions=False,
+    ) as failure_client:
+        response = failure_client.post(
+            f"/api/plans/{plan_id}/accept",
+            headers=idempotency("accept-rollback-request"),
+            json={"expected_version": 1},
+        )
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+
+    with SessionLocal() as session:
+        plan = session.get(Plan, plan_id)
+        thread = session.get(Thread, context.thread_id)
+        assert plan is not None
+        assert plan.status == "generated"
+        assert plan.accepted_at is None
+        assert thread is not None
+        assert thread.active_plan_id == plan_id
+        assert thread.current_step == "plan_generated"
+        assert session.scalar(select(func.count(UserSnapshot.id))) == snapshot_count_before
+        assert (
+            session.scalar(
+                select(func.count(IdempotencyRecord.id)).where(
+                    IdempotencyRecord.route == f"POST /api/plans/{plan_id}/accept",
+                    IdempotencyRecord.key == "accept-rollback-request",
+                )
+            )
+            == 0
+        )
 
 
 def test_feedback_transaction_rolls_back_when_snapshot_fails(client: TestClient, monkeypatch) -> None:
@@ -366,7 +504,7 @@ def test_feedback_transaction_rolls_back_when_snapshot_fails(client: TestClient,
         assert action_count == 0
         thread = session.get(Thread, context.thread_id)
         assert thread is not None
-        assert thread.current_step == "plan_accepted"
+        assert thread.current_step == "action_pending"
         hypothesis = session.scalar(select(Hypothesis).where(Hypothesis.thread_id == context.thread_id))
         assert hypothesis is not None
         assert hypothesis.supporting_evidence == []

@@ -16,6 +16,11 @@ from app.rules.hypothesis_lifecycle import (
     is_active_hypothesis,
 )
 from app.rules.revision_mock import analyze_feedback
+from app.rules.workflow_steps import (
+    advance_workflow_step,
+    later_workflow_step,
+    workflow_step_is_at_least,
+)
 from app.schemas.action_result import (
     ActionResultCreate,
     ActionResultRead,
@@ -49,7 +54,12 @@ class ActionService:
         plan = self.workflow.get_plan(payload.plan_id, self.user_id)
         if plan is None or plan.thread_id != thread.id:
             raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "计划不存在。")
-        if plan.status != "accepted" or thread.active_plan_id != plan.id:
+        if (
+            plan.status != "accepted"
+            or plan.accepted_at is None
+            or thread.active_plan_id != plan.id
+            or not workflow_step_is_at_least(thread.current_step, "plan_accepted")
+        ):
             raise APIError(
                 status.HTTP_409_CONFLICT,
                 "PLAN_NOT_ACCEPTED",
@@ -146,7 +156,10 @@ class ActionService:
             user_correction=correction_text,
             increment_revision=True,
         )
-        thread.current_step = "system_revised"
+        action_step = later_workflow_step(thread.current_step, "action_pending")
+        thread.current_step = (
+            action_step if action_step == "system_revised" else advance_workflow_step(action_step, "system_revised")
+        )
         thread.status = "active"
         thread.phase = decision.next_stage
         thread.last_activity_at = datetime.now(UTC)

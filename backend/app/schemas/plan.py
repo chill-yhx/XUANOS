@@ -95,4 +95,4 @@ class PlanReviseResult(BaseModel):
 class PlanAcceptResult(BaseModel):
     plan: PlanRead
     snapshot: SnapshotRead
-    current_step: Literal["plan_accepted"]
+    current_step: Literal["plan_accepted", "action_pending", "feedback_submitted", "system_revised"]
