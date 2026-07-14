@@ -1,12 +1,23 @@
+import { readAuthSession } from '../api/authSession'
 import { understandingQuestionAt } from '../data/understandingQuestions'
 import type { ActionObstacleCode, DemoSessionState, FeedbackPayload, InteractionStep } from '../types'
-import { readAuthSession } from '../api/authSession'
 import { createInitialSession } from './initialState'
+import { recoverServerStep, uiRecoveryStep } from './threadRecovery'
 
-const STORAGE_PREFIX = 'xuanos:integration-cache:v3'
+const USER_STORAGE_PREFIX = 'xuanos:integration-cache:v4:user'
+const THREAD_STORAGE_PREFIX = 'xuanos:integration-cache:v4:thread'
+const LEGACY_STORAGE_PREFIX = 'xuanos:integration-cache:v3'
 
-function storageKey(userId: string) {
-  return `${STORAGE_PREFIX}:${userId}`
+function userStorageKey(userId: string) {
+  return `${USER_STORAGE_PREFIX}:${userId}`
+}
+
+function threadStorageKey(userId: string, threadId: string) {
+  return `${THREAD_STORAGE_PREFIX}:${userId}:${threadId}`
+}
+
+function legacyStorageKey(userId: string) {
+  return `${LEGACY_STORAGE_PREFIX}:${userId}`
 }
 
 const validSteps = new Set<InteractionStep>([
@@ -24,79 +35,100 @@ const validSteps = new Set<InteractionStep>([
   'system_revised',
 ])
 
-interface IntegrationCache {
+type UnderstandingCache = Pick<
+  DemoSessionState,
+  | 'activeUnderstandingSession'
+  | 'understandingSessionId'
+  | 'understandingStatus'
+  | 'understandingConfirmedAt'
+  | 'serverUnderstanding'
+  | 'answerMeta'
+  | 'submittedAnswers'
+  | 'currentQuestionIndex'
+  | 'currentQuestion'
+  | 'corrections'
+  | 'lastSuccessfulUnderstandingAt'
+>
+
+type DraftCache = Pick<
+  DemoSessionState,
+  | 'expressionMode'
+  | 'userInput'
+  | 'currentAnswerDraft'
+  | 'understandingAssessmentDraft'
+  | 'understandingCorrectionDraft'
+>
+
+type PlanCache = Pick<
+  DemoSessionState,
+  | 'activePlanId'
+  | 'currentPlan'
+  | 'planVersions'
+  | 'lastSuccessfulPlanAt'
+  | 'lastViewedPlanId'
+>
+
+type ActionCache = Pick<
+  DemoSessionState,
+  | 'latestActionResult'
+  | 'actionResultId'
+  | 'actionResultStatus'
+  | 'actionResultSubmittedAt'
+  | 'latestSnapshot'
+  | 'previousSnapshot'
+  | 'snapshotDiff'
+  | 'latestActionHypothesis'
+  | 'systemRevision'
+  | 'systemRevisionAt'
+>
+
+type CorrectionCache = Pick<
+  DemoSessionState,
+  | 'activeCorrectionTarget'
+  | 'correctionType'
+  | 'correctionDraft'
+  | 'correctionReason'
+  | 'correctionDiscontinueConfirmed'
+  | 'latestCorrectionId'
+  | 'latestCorrectionAt'
+  | 'latestCorrectionResult'
+>
+
+interface CacheGroups {
+  understanding: UnderstandingCache
+  drafts: DraftCache
+  plans: PlanCache
+  planDrafts: Pick<DemoSessionState, 'planModificationDraft'>
+  actions: ActionCache
+  feedbackDraft: Pick<DemoSessionState, 'actionFeedback'>
+  correction: CorrectionCache
+  ui: Pick<DemoSessionState, 'currentStep' | 'uiThreadStatus' | 'uiThreadPhase' | 'systemSnapshot'>
+  mock?: CacheGroups['ui']
+}
+
+interface UserIntegrationCache {
+  schemaVersion: 4
+  userId: string
+  savedAt: string
+  lastThreadId: string | null
+  availableThreads: DemoSessionState['availableThreads']
+  latestSnapshot: DemoSessionState['serverSnapshot']
+}
+
+interface ThreadIntegrationCache extends CacheGroups {
+  schemaVersion: 4
+  userId: string
+  threadId: string
+  savedAt: string
+  server: Pick<DemoSessionState, 'serverStep' | 'activeThread' | 'serverSnapshot'>
+}
+
+interface LegacyIntegrationCache extends CacheGroups {
   schemaVersion: 3
   userId: string
   savedAt: string
   lastThreadId: string | null
-  server: Pick<
-    DemoSessionState,
-    'serverStep' | 'activeThread' | 'availableThreads' | 'serverSnapshot'
-  >
-  understanding: Pick<
-    DemoSessionState,
-    | 'activeUnderstandingSession'
-    | 'understandingSessionId'
-    | 'understandingStatus'
-    | 'understandingConfirmedAt'
-    | 'serverUnderstanding'
-    | 'answerMeta'
-    | 'submittedAnswers'
-    | 'currentQuestionIndex'
-    | 'currentQuestion'
-    | 'corrections'
-    | 'lastSuccessfulUnderstandingAt'
-  >
-  drafts: Pick<
-    DemoSessionState,
-    | 'expressionMode'
-    | 'userInput'
-    | 'currentAnswerDraft'
-    | 'understandingAssessmentDraft'
-    | 'understandingCorrectionDraft'
-  >
-  plans: Pick<
-    DemoSessionState,
-    | 'activePlanId'
-    | 'currentPlan'
-    | 'planVersions'
-    | 'lastSuccessfulPlanAt'
-    | 'lastViewedPlanId'
-  >
-  planDrafts: Pick<DemoSessionState, 'planModificationDraft'>
-  actions: Pick<
-    DemoSessionState,
-    | 'latestActionResult'
-    | 'actionResultId'
-    | 'actionResultStatus'
-    | 'actionResultSubmittedAt'
-    | 'latestSnapshot'
-    | 'previousSnapshot'
-    | 'snapshotDiff'
-    | 'latestActionHypothesis'
-    | 'systemRevision'
-    | 'systemRevisionAt'
-  >
-  feedbackDraft: Pick<DemoSessionState, 'actionFeedback'>
-  correction: Pick<
-    DemoSessionState,
-    | 'activeCorrectionTarget'
-    | 'correctionType'
-    | 'correctionDraft'
-    | 'correctionReason'
-    | 'correctionDiscontinueConfirmed'
-    | 'latestCorrectionId'
-    | 'latestCorrectionAt'
-    | 'latestCorrectionResult'
-  >
-  ui: Pick<
-    DemoSessionState,
-    | 'currentStep'
-    | 'uiThreadStatus'
-    | 'uiThreadPhase'
-    | 'systemSnapshot'
-  >
-  mock?: IntegrationCache['ui']
+  server: Pick<DemoSessionState, 'serverStep' | 'activeThread' | 'availableThreads' | 'serverSnapshot'>
 }
 
 const obstacleCodes = new Set<ActionObstacleCode>([
@@ -145,33 +177,79 @@ function isStep(value: unknown): value is InteractionStep {
   return typeof value === 'string' && validSteps.has(value as InteractionStep)
 }
 
-function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>): DemoSessionState {
-  const server = parsed.server
-  const cachedUnderstanding = parsed.understanding
-  const drafts = parsed.drafts
-  const plans = parsed.plans
-  const planDrafts = parsed.planDrafts
-  const actions = parsed.actions
-  const feedbackDraft = parsed.feedbackDraft
-  const correction = parsed.correction
-  const ui = parsed.ui ?? parsed.mock
-  const serverSnapshot = server?.serverSnapshot ?? null
-  const activeThread = server?.activeThread ?? null
+function readJson(key: string): unknown {
+  try {
+    const raw = window.localStorage.getItem(key)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function readUserCache(userId: string): UserIntegrationCache | null {
+  const parsed = readJson(userStorageKey(userId)) as Partial<UserIntegrationCache> | null
+  if (
+    !parsed
+    || parsed.schemaVersion !== 4
+    || parsed.userId !== userId
+    || !Array.isArray(parsed.availableThreads)
+    || parsed.availableThreads.some((thread) => thread.userId !== userId)
+  ) return null
+  if (parsed.latestSnapshot?.userId && parsed.latestSnapshot.userId !== userId) return null
+  return parsed as UserIntegrationCache
+}
+
+function readThreadCache(userId: string, threadId: string): ThreadIntegrationCache | null {
+  const parsed = readJson(threadStorageKey(userId, threadId)) as Partial<ThreadIntegrationCache> | null
+  if (
+    !parsed
+    || parsed.schemaVersion !== 4
+    || parsed.userId !== userId
+    || parsed.threadId !== threadId
+    || parsed.server?.activeThread?.id !== threadId
+    || parsed.server.activeThread.userId !== userId
+  ) return null
+  if (parsed.server.serverSnapshot?.userId && parsed.server.serverSnapshot.userId !== userId) return null
+  return parsed as ThreadIntegrationCache
+}
+
+function restoreCacheState(
+  fallback: DemoSessionState,
+  cache: ThreadIntegrationCache | LegacyIntegrationCache,
+  availableThreads: DemoSessionState['availableThreads'],
+): DemoSessionState {
+  const cachedUnderstanding = cache.understanding
+  const drafts = cache.drafts
+  const plans = cache.plans
+  const actions = cache.actions
+  const correction = cache.correction
+  const ui = cache.ui ?? cache.mock
+  const activeThread = cache.server.activeThread
+  const serverSnapshot = cache.server.serverSnapshot ?? null
+  const storedServerStep = isStep(cache.server.serverStep) ? cache.server.serverStep : fallback.serverStep
+  const serverStep = recoverServerStep(
+    storedServerStep,
+    cachedUnderstanding?.activeUnderstandingSession?.status ?? null,
+    Boolean(cachedUnderstanding?.serverUnderstanding),
+  )
   const cachedStep = isStep(ui?.currentStep) ? ui.currentStep : fallback.currentStep
-  const currentStep = cachedStep === 'feedback_submitted' ? 'action_pending' : cachedStep
-  const serverStep = isStep(server?.serverStep) ? server.serverStep : fallback.serverStep
+  const normalizedCachedStep = cachedStep === 'feedback_submitted' ? 'action_pending' : cachedStep
+  const cachedPlan = plans?.currentPlan ?? null
+  const canRestoreFeedbackDraft = normalizedCachedStep === 'action_pending'
+    && ['plan_accepted', 'action_pending', 'system_revised'].includes(serverStep)
+    && cachedPlan?.status === 'accepted'
+    && cache.feedbackDraft?.actionFeedback.planId === cachedPlan.id
+  const currentStep = serverStep === 'idle'
+    ? uiRecoveryStep(serverStep, drafts?.expressionMode ?? null)
+    : canRestoreFeedbackDraft ? 'action_pending' : serverStep
   const legacyUi = ui as Partial<DemoSessionState> | undefined
   const submittedAnswers = cachedUnderstanding?.submittedAnswers ?? legacyUi?.answers ?? {}
-  const currentQuestionIndex = cachedUnderstanding?.currentQuestionIndex
-    ?? legacyUi?.currentQuestionIndex
-    ?? 0
+  const currentQuestionIndex = cachedUnderstanding?.currentQuestionIndex ?? legacyUi?.currentQuestionIndex ?? 0
   const currentQuestion = cachedUnderstanding?.currentQuestion
     ?? (currentStep === 'asking_question' ? understandingQuestionAt(currentQuestionIndex) : null)
   const serverUnderstanding = cachedUnderstanding?.serverUnderstanding ?? legacyUi?.understanding ?? null
-  const hasUnderstandingCache = Boolean(cachedUnderstanding?.understandingSessionId || serverUnderstanding)
-  const cachedCurrentPlan = plans?.currentPlan ?? null
+  const cachedCurrentPlan = cachedPlan
   const cachedPlanVersions = plans?.planVersions ?? []
-  const hasPlanCache = Boolean(cachedCurrentPlan || cachedPlanVersions.length)
   const snapshotCandidates = [
     serverSnapshot,
     actions?.latestSnapshot,
@@ -183,6 +261,7 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
   )
   const latestActionResult = actions?.latestActionResult ?? legacyUi?.latestActionResult ?? null
   const latestCorrectionResult = correction?.latestCorrectionResult ?? null
+
   return {
     ...fallback,
     ...ui,
@@ -190,8 +269,8 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     currentStep,
     serverStep,
     activeThread,
-    activeThreadId: activeThread?.id ?? parsed.lastThreadId ?? null,
-    availableThreads: server?.availableThreads ?? [],
+    activeThreadId: activeThread?.id ?? null,
+    availableThreads,
     serverSnapshot: latestSnapshot,
     snapshotId: latestSnapshot?.id ?? null,
     snapshotVersion: latestSnapshot?.version ?? null,
@@ -207,7 +286,7 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     understanding: serverUnderstanding,
     understandingRequestStatus: 'idle',
     understandingApiError: null,
-    understandingSource: hasUnderstandingCache ? 'cache' : fallback.understandingSource,
+    understandingSource: serverUnderstanding || cachedUnderstanding?.understandingSessionId ? 'cache' : 'none',
     lastSuccessfulUnderstandingAt: cachedUnderstanding?.lastSuccessfulUnderstandingAt ?? null,
     expressionMode: drafts?.expressionMode ?? legacyUi?.expressionMode ?? null,
     userInput: drafts?.userInput ?? legacyUi?.userInput ?? '',
@@ -225,16 +304,16 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     activePlanId: plans?.activePlanId ?? cachedCurrentPlan?.id ?? null,
     planRequestStatus: 'idle',
     planApiError: null,
-    planSource: hasPlanCache ? 'cache' : fallback.planSource,
+    planSource: cachedCurrentPlan || cachedPlanVersions.length ? 'cache' : 'none',
     lastSuccessfulPlanAt: plans?.lastSuccessfulPlanAt ?? cachedCurrentPlan?.updatedAt ?? cachedCurrentPlan?.createdAt ?? null,
     lastViewedPlanId: plans?.lastViewedPlanId ?? cachedCurrentPlan?.id ?? null,
     planModificationDraft: {
       ...fallback.planModificationDraft,
-      ...planDrafts?.planModificationDraft,
+      ...cache.planDrafts?.planModificationDraft,
     },
     actionFeedback: restoreFeedbackDraft(
       fallback.actionFeedback,
-      feedbackDraft?.actionFeedback ?? legacyUi?.actionFeedback,
+      cache.feedbackDraft?.actionFeedback ?? legacyUi?.actionFeedback,
     ),
     latestActionResult,
     actionResultId: actions?.actionResultId ?? latestActionResult?.id ?? null,
@@ -242,13 +321,13 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     actionResultSubmittedAt: actions?.actionResultSubmittedAt ?? latestActionResult?.submittedAt ?? null,
     actionResultRequestStatus: 'idle',
     actionResultApiError: null,
-    actionResultSource: latestActionResult ? 'cache' : fallback.actionResultSource,
+    actionResultSource: latestActionResult ? 'cache' : 'none',
     latestSnapshot,
     previousSnapshot: actions?.previousSnapshot ?? null,
     snapshotDiff: actions?.snapshotDiff ?? null,
     latestActionHypothesis: actions?.latestActionHypothesis ?? null,
     systemRevision: actions?.systemRevision ?? legacyUi?.systemRevision ?? null,
-    systemRevisionSource: actions?.systemRevision ? 'cache' : fallback.systemRevisionSource,
+    systemRevisionSource: actions?.systemRevision ? 'cache' : 'none',
     systemRevisionAt: actions?.systemRevisionAt ?? latestActionResult?.submittedAt ?? null,
     activeCorrectionTarget: correction?.activeCorrectionTarget ?? null,
     correctionType: correction?.correctionType ?? null,
@@ -260,42 +339,132 @@ function restoreV3(fallback: DemoSessionState, parsed: Partial<IntegrationCache>
     latestCorrectionId: correction?.latestCorrectionId ?? latestCorrectionResult?.correction.id ?? null,
     latestCorrectionAt: correction?.latestCorrectionAt ?? latestCorrectionResult?.correction.createdAt ?? null,
     latestCorrectionResult,
-    correctionSource: latestCorrectionResult ? 'cache' : fallback.correctionSource,
+    correctionSource: latestCorrectionResult ? 'cache' : 'none',
     systemSnapshot: latestSnapshot ?? ui?.systemSnapshot ?? fallback.systemSnapshot,
   }
+}
+
+function readLegacyState(userId: string): DemoSessionState | null {
+  const parsed = readJson(legacyStorageKey(userId)) as Partial<LegacyIntegrationCache> | null
+  const activeThread = parsed?.server?.activeThread
+  if (
+    !parsed
+    || parsed.schemaVersion !== 3
+    || parsed.userId !== userId
+    || !activeThread
+    || activeThread.userId !== userId
+    || parsed.lastThreadId !== activeThread.id
+    || !Array.isArray(parsed.server?.availableThreads)
+    || parsed.server.availableThreads.some((thread) => thread.userId !== userId)
+  ) return null
+  return restoreCacheState(
+    createInitialSession(),
+    parsed as LegacyIntegrationCache,
+    parsed.server.availableThreads,
+  )
+}
+
+export function readThreadIntegrationCache(userId: string, threadId: string): DemoSessionState | null {
+  const threadCache = readThreadCache(userId, threadId)
+  if (!threadCache) return null
+  const userCache = readUserCache(userId)
+  return restoreCacheState(
+    createInitialSession(),
+    threadCache,
+    userCache?.availableThreads ?? [threadCache.server.activeThread!],
+  )
 }
 
 export function restoreIntegrationState(): DemoSessionState {
   const fallback = createInitialSession()
   const authSession = readAuthSession()
   if (!authSession) return fallback
-  try {
-    const raw = window.localStorage.getItem(storageKey(authSession.userId))
-    if (!raw) return fallback
-    const parsed = JSON.parse(raw) as Partial<IntegrationCache>
-    if (parsed.schemaVersion !== 3 || parsed.userId !== authSession.userId) return fallback
-    return restoreV3(fallback, parsed)
-  } catch {
-    return fallback
+
+  const userCache = readUserCache(authSession.userId)
+  if (userCache) {
+    const threadId = userCache.lastThreadId
+    if (threadId) {
+      const restored = readThreadIntegrationCache(authSession.userId, threadId)
+      if (restored) return restored
+      const activeThread = userCache.availableThreads.find((thread) => thread.id === threadId) ?? null
+      if (activeThread) {
+        return {
+          ...fallback,
+          activeThread,
+          activeThreadId: activeThread.id,
+          availableThreads: userCache.availableThreads,
+          serverStep: activeThread.currentStep,
+          currentStep: uiRecoveryStep(activeThread.currentStep, null),
+          serverSnapshot: userCache.latestSnapshot,
+          latestSnapshot: userCache.latestSnapshot,
+          snapshotId: userCache.latestSnapshot?.id ?? null,
+          snapshotVersion: userCache.latestSnapshot?.version ?? null,
+          systemSnapshot: userCache.latestSnapshot ?? fallback.systemSnapshot,
+          isOfflineCache: true,
+          dataSource: 'cache',
+        }
+      }
+    }
+    return {
+      ...fallback,
+      availableThreads: userCache.availableThreads,
+      serverSnapshot: userCache.latestSnapshot,
+      latestSnapshot: userCache.latestSnapshot,
+      snapshotId: userCache.latestSnapshot?.id ?? null,
+      snapshotVersion: userCache.latestSnapshot?.version ?? null,
+      systemSnapshot: userCache.latestSnapshot ?? fallback.systemSnapshot,
+      isOfflineCache: Boolean(userCache.latestSnapshot),
+      dataSource: userCache.latestSnapshot ? 'cache' : 'none',
+    }
   }
+
+  const legacy = readLegacyState(authSession.userId)
+  if (!legacy) return fallback
+  writeIntegrationCache(legacy)
+  try {
+    window.localStorage.removeItem(legacyStorageKey(authSession.userId))
+  } catch {
+    // A validated legacy cache remains safe to retry on the next load.
+  }
+  return legacy
 }
 
 export function writeIntegrationCache(state: DemoSessionState) {
   const authSession = readAuthSession()
   if (!authSession) return
+  const userId = authSession.userId
   if (
-    state.activeThread?.userId && state.activeThread.userId !== authSession.userId
-    || state.serverSnapshot?.userId && state.serverSnapshot.userId !== authSession.userId
+    state.activeThread?.userId && state.activeThread.userId !== userId
+    || state.serverSnapshot?.userId && state.serverSnapshot.userId !== userId
   ) return
-  const cache: IntegrationCache = {
-    schemaVersion: 3,
-    userId: authSession.userId,
+
+  const availableThreads = state.availableThreads.filter((thread) => thread.userId === userId)
+  const userCache: UserIntegrationCache = {
+    schemaVersion: 4,
+    userId,
     savedAt: new Date().toISOString(),
     lastThreadId: state.activeThreadId,
+    availableThreads,
+    latestSnapshot: state.serverSnapshot,
+  }
+  try {
+    window.localStorage.setItem(userStorageKey(userId), JSON.stringify(userCache))
+  } catch {
+    return
+  }
+
+  const thread = state.activeThread
+  if (!thread || state.activeThreadId !== thread.id) return
+  if (state.isLoading && state.dataSource === 'none') return
+
+  const threadCache: ThreadIntegrationCache = {
+    schemaVersion: 4,
+    userId,
+    threadId: thread.id,
+    savedAt: new Date().toISOString(),
     server: {
       serverStep: state.serverStep,
-      activeThread: state.activeThread,
-      availableThreads: state.availableThreads,
+      activeThread: thread,
       serverSnapshot: state.serverSnapshot,
     },
     understanding: {
@@ -325,9 +494,7 @@ export function writeIntegrationCache(state: DemoSessionState) {
       lastSuccessfulPlanAt: state.lastSuccessfulPlanAt,
       lastViewedPlanId: state.lastViewedPlanId,
     },
-    planDrafts: {
-      planModificationDraft: state.planModificationDraft,
-    },
+    planDrafts: { planModificationDraft: state.planModificationDraft },
     actions: {
       latestActionResult: state.latestActionResult,
       actionResultId: state.actionResultId,
@@ -340,9 +507,7 @@ export function writeIntegrationCache(state: DemoSessionState) {
       systemRevision: state.systemRevision,
       systemRevisionAt: state.systemRevisionAt,
     },
-    feedbackDraft: {
-      actionFeedback: state.actionFeedback,
-    },
+    feedbackDraft: { actionFeedback: state.actionFeedback },
     correction: {
       activeCorrectionTarget: state.activeCorrectionTarget,
       correctionType: state.correctionType,
@@ -361,16 +526,22 @@ export function writeIntegrationCache(state: DemoSessionState) {
     },
   }
   try {
-    window.localStorage.setItem(storageKey(authSession.userId), JSON.stringify(cache))
+    window.localStorage.setItem(threadStorageKey(userId, thread.id), JSON.stringify(threadCache))
   } catch {
-    // The current in-memory state remains usable without browser storage.
+    // The in-memory state remains usable without thread cache persistence.
   }
 }
 
 export function clearIntegrationCache(userId = readAuthSession()?.userId ?? null) {
+  if (!userId) return
   try {
-    if (userId) window.localStorage.removeItem(storageKey(userId))
+    const keys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))
+      .filter((key): key is string => Boolean(key))
+      .filter((key) => key === userStorageKey(userId)
+        || key === legacyStorageKey(userId)
+        || key.startsWith(`${THREAD_STORAGE_PREFIX}:${userId}:`))
+    keys.forEach((key) => window.localStorage.removeItem(key))
   } catch {
-    // The reducer still resets the in-memory demo state.
+    // The reducer still resets in-memory state when storage is unavailable.
   }
 }

@@ -9,11 +9,16 @@ interface PageProps {
 }
 
 export function HomePage({ onNavigate }: PageProps) {
-  const { state, continuePage } = useInteraction()
+  const { state, continuePage, startCalibration } = useInteraction()
   const hasProgress = Boolean(state.activeThreadId)
 
-  const handleStart = () => {
-    onNavigate(hasProgress ? continuePage : 'understanding')
+  const handleStart = async () => {
+    if (!hasProgress || state.serverStep === 'idle') {
+      const ready = await startCalibration()
+      if (ready) onNavigate('understanding')
+      return
+    }
+    onNavigate(continuePage)
   }
   const values = [
     { code: 'DIAGNOSE', title: '识别真实卡点' },
@@ -32,7 +37,7 @@ export function HomePage({ onNavigate }: PageProps) {
         </h1>
         <p className="hero-description">先识别真实卡点，<br />再收束成唯一行动。</p>
         <div className="hero-actions">
-          <PrimaryButton onClick={handleStart} disabled={state.isLoading}>
+          <PrimaryButton onClick={() => void handleStart()} disabled={state.isLoading}>
             {state.isLoading ? '连接系统' : hasProgress ? '继续上次任务' : '开始校准'}
           </PrimaryButton>
           <SecondaryButton onClick={() => onNavigate('system')}>查看我的系统</SecondaryButton>

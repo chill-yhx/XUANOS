@@ -23,20 +23,21 @@ async function writeWithIdempotency<TDto, TResult>(
   operation: string,
   path: string,
   payload: unknown,
+  threadId: string,
   map: (dto: TDto) => TResult,
 ): Promise<TResult> {
-  const idempotencyKey = getOrCreateIdempotencyKey(operation, payload)
+  const idempotencyKey = getOrCreateIdempotencyKey(operation, payload, threadId)
   try {
     const dto = await apiData<TDto>(path, {
       method: 'POST',
       body: payload,
       idempotencyKey,
     })
-    clearIdempotencyKey(operation, idempotencyKey)
+    clearIdempotencyKey(operation, idempotencyKey, threadId)
     return map(dto)
   } catch (error) {
     const normalized = normalizeApiError(error)
-    if (!normalized.retryable) clearIdempotencyKey(operation, idempotencyKey)
+    if (!normalized.retryable) clearIdempotencyKey(operation, idempotencyKey, threadId)
     throw normalized
   }
 }
@@ -47,6 +48,7 @@ export async function createPlan(input: CreatePlanInput): Promise<PlanCreateResu
     `plan-create-${input.threadId}-${input.understandingSessionId}`,
     '/api/plans',
     payload,
+    input.threadId,
     (dto: PlanCreateResultDto) => fromPlanCreateResult(dto, input.mainGoal),
   )
 }
@@ -57,6 +59,7 @@ export async function revisePlan(input: RevisePlanInput): Promise<PlanReviseResu
     `plan-revise-${input.plan.id}-v${input.plan.version}`,
     `/api/plans/${encodeURIComponent(input.plan.id)}/revise`,
     payload,
+    input.threadId,
     (dto: PlanReviseResultDto) => fromPlanReviseResult(dto, input.mainGoal),
   )
 }
@@ -67,6 +70,7 @@ export async function acceptPlan(input: AcceptPlanInput): Promise<PlanAcceptResu
     `plan-accept-${input.plan.id}-v${input.plan.version}`,
     `/api/plans/${encodeURIComponent(input.plan.id)}/accept`,
     payload,
+    input.threadId,
     (dto: PlanAcceptResultDto) => fromPlanAcceptResult(dto, input.mainGoal),
   )
 }

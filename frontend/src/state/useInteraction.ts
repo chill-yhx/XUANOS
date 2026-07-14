@@ -11,6 +11,8 @@ export interface InteractionContextValue {
   state: DemoSessionState
   dispatch: Dispatch<InteractionAction>
   resetDemo: () => void
+  switchThread: (threadId: string) => Promise<boolean>
+  createNewThread: () => Promise<boolean>
   startCalibration: () => Promise<boolean>
   refreshSnapshot: () => Promise<void>
   selectExpressionMode: (mode: ExpressionMode) => Promise<boolean>

@@ -6,6 +6,7 @@ import type {
   CorrectionTarget,
   DemoSessionState,
   PlanVersion,
+  RequestScope,
   SystemSnapshot,
   ThreadAggregateState,
 } from '../types'
@@ -64,6 +65,10 @@ function activeThread(currentStep: ActiveThread['currentStep']): ActiveThread {
   }
 }
 
+function requestScope(threadId = 'thread-1', generation = 1): RequestScope {
+  return { userId: 'test-user', threadId, generation }
+}
+
 function threadAggregate(serverStep: ThreadAggregateState['serverStep']): ThreadAggregateState {
   const plan = acceptedPlan()
   return {
@@ -108,6 +113,9 @@ describe('correction stale snapshot recovery', () => {
     }
     let state: DemoSessionState = {
       ...createInitialSession(),
+      activeThread: activeThread('system_revised'),
+      activeThreadId: 'thread-1',
+      activeThreadGeneration: 1,
       serverSnapshot: snapshotV1,
       latestSnapshot: snapshotV1,
       systemSnapshot: snapshotV1,
@@ -123,6 +131,7 @@ describe('correction stale snapshot recovery', () => {
       type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED',
       snapshot: snapshotV2,
       error: staleError,
+      scope: requestScope(),
     })
 
     expect(state.latestSnapshot?.id).toBe(snapshotV2.id)
@@ -155,6 +164,7 @@ describe('plan workflow monotonicity', () => {
       ...createInitialSession(),
       activeThreadId: thread.id,
       activeThread: thread,
+      activeThreadGeneration: 1,
       currentStep: 'system_revised',
       serverStep: 'system_revised',
       currentPlan: acceptedPlan(),
@@ -167,6 +177,7 @@ describe('plan workflow monotonicity', () => {
     const next = interactionReducer(state, {
       type: 'THREAD_AGGREGATE_LOADED',
       aggregate: threadAggregate('action_pending'),
+      scope: requestScope(),
     })
 
     expect(next.serverStep).toBe('system_revised')
@@ -180,6 +191,7 @@ describe('plan workflow monotonicity', () => {
       ...createInitialSession(),
       activeThreadId: thread.id,
       activeThread: thread,
+      activeThreadGeneration: 1,
       currentStep: 'system_revised',
       serverStep: 'system_revised',
       dataSource: 'cache',
@@ -189,6 +201,7 @@ describe('plan workflow monotonicity', () => {
     const next = interactionReducer(state, {
       type: 'THREAD_AGGREGATE_LOADED',
       aggregate: threadAggregate('action_pending'),
+      scope: requestScope(),
     })
 
     expect(next.serverStep).toBe('action_pending')
@@ -201,6 +214,9 @@ describe('plan workflow monotonicity', () => {
     const revisedSnapshot = snapshot('snapshot-v3', 3)
     const state: DemoSessionState = {
       ...createInitialSession(),
+      activeThread: activeThread('action_pending'),
+      activeThreadId: 'thread-1',
+      activeThreadGeneration: 1,
       currentStep: 'action_pending',
       serverStep: 'action_pending',
       currentPlan: plan,
@@ -219,6 +235,7 @@ describe('plan workflow monotonicity', () => {
         snapshot: snapshot('snapshot-v2', 2),
         currentStep: 'plan_accepted',
       },
+      scope: requestScope(),
     })
 
     expect(next.serverStep).toBe('action_pending')

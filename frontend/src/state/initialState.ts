@@ -45,6 +45,7 @@ export function createInitialSession(): DemoSessionState {
 
   return {
     schemaVersion: 2,
+    activeThreadGeneration: 0,
     currentStep: 'idle',
     serverStep: 'idle',
     isLoading: false,

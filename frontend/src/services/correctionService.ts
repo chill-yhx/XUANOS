@@ -16,7 +16,7 @@ export async function submitUserCorrection(
 ): Promise<UserCorrectionResult> {
   const payload = toCorrectionRequest(input)
   const operation = `user-correction-${input.target.targetType}-${input.target.targetId}`
-  const idempotencyKey = getOrCreateIdempotencyKey(operation, payload)
+  const idempotencyKey = getOrCreateIdempotencyKey(operation, payload, input.threadId)
 
   try {
     const dto = await apiData<UserCorrectionResultDto>('/api/users/me/corrections', {
@@ -31,11 +31,11 @@ export async function submitUserCorrection(
       dto.snapshot_updated,
       input,
     )
-    clearIdempotencyKey(operation, idempotencyKey)
+    clearIdempotencyKey(operation, idempotencyKey, input.threadId)
     return result
   } catch (error) {
     const normalized = normalizeApiError(error)
-    if (!normalized.retryable) clearIdempotencyKey(operation, idempotencyKey)
+    if (!normalized.retryable) clearIdempotencyKey(operation, idempotencyKey, input.threadId)
     throw normalized
   }
 }

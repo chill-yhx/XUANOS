@@ -66,7 +66,7 @@ export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateS
         actionIdentifier: actionItem?.id ?? currentPlan?.singleAction ?? dto.latest_action_result.plan_id,
       })
     : null
-  const currentQuestion = thread.currentStep === 'asking_question' && activeUnderstandingSession
+  const currentQuestion = activeUnderstandingSession?.status === 'collecting'
     ? understandingQuestionAt(activeUnderstandingSession.currentQuestionIndex)
     : null
 

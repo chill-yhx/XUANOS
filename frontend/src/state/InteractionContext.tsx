@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { normalizeApiError, toApiErrorState, toCorrectionApiErrorState } from '../api/apiErrors'
-import { AUTH_SESSION_INVALIDATED_EVENT } from '../api/authSession'
+import { AUTH_SESSION_INVALIDATED_EVENT, readAuthSession } from '../api/authSession'
 import { clearIdempotencyStore } from '../api/idempotency'
 import { submitActionResult as submitActionResultOnServer } from '../services/actionResultService'
 import { ensureAuthSession } from '../services/authService'
@@ -11,7 +11,7 @@ import {
   createPlan as createPlanOnServer,
   revisePlan as revisePlanOnServer,
 } from '../services/planService'
-import { createThread, getThread, listThreads } from '../services/threadService'
+import { createThread as createThreadOnServer, getThread, listThreads } from '../services/threadService'
 import {
   analyzeUnderstanding,
   confirmUnderstanding as confirmUnderstandingOnServer,
@@ -22,9 +22,15 @@ import type {
   ExpressionMode,
   InteractionStep,
   PageId,
+  RequestScope,
   UnderstandingAssessment,
 } from '../types'
-import { clearIntegrationCache, restoreIntegrationState, writeIntegrationCache } from './integrationCache'
+import {
+  clearIntegrationCache,
+  readThreadIntegrationCache,
+  restoreIntegrationState,
+  writeIntegrationCache,
+} from './integrationCache'
 import { interactionReducer } from './interactionReducer'
 import { InteractionContext } from './useInteraction'
 
@@ -49,9 +55,40 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const planRequestRef = useRef<Promise<boolean> | null>(null)
   const actionResultRequestRef = useRef<Promise<boolean> | null>(null)
   const correctionRequestRef = useRef<Promise<boolean> | null>(null)
+  const activeThreadIdRef = useRef(state.activeThreadId)
+  const threadGenerationRef = useRef(state.activeThreadGeneration)
+
+  const nextThreadGeneration = () => {
+    threadGenerationRef.current += 1
+    return threadGenerationRef.current
+  }
+
+  const requestScope = (
+    threadId = activeThreadIdRef.current,
+    generation = threadGenerationRef.current,
+  ): RequestScope | null => {
+    const userId = readAuthSession()?.userId
+    return userId && threadId ? { userId, threadId, generation } : null
+  }
+
+  const isRequestCurrent = (scope: RequestScope) => {
+    return readAuthSession()?.userId === scope.userId
+      && activeThreadIdRef.current === scope.threadId
+      && threadGenerationRef.current === scope.generation
+  }
+
+  const clearThreadRequestRefs = () => {
+    snapshotRequestRef.current = null
+    understandingRequestRef.current = null
+    planRequestRef.current = null
+    actionResultRequestRef.current = null
+    correctionRequestRef.current = null
+  }
 
   useEffect(() => {
     stateRef.current = state
+    activeThreadIdRef.current = state.activeThreadId
+    threadGenerationRef.current = state.activeThreadGeneration
     writeIntegrationCache(state)
   }, [state])
 
@@ -64,6 +101,9 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         ?? null
       clearIntegrationCache(userId)
       clearIdempotencyStore(userId)
+      activeThreadIdRef.current = null
+      nextThreadGeneration()
+      clearThreadRequestRefs()
       dispatch({
         type: 'AUTH_SESSION_INVALIDATED',
         error: {
@@ -84,62 +124,106 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
 
     const hydrate = async () => {
       dispatch({ type: 'API_REQUEST_STARTED' })
-      let firstError: unknown = null
-
+      let authUserId: string
       try {
-        await ensureAuthSession()
+        authUserId = (await ensureAuthSession()).userId
       } catch (error) {
         dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(error) })
         return
       }
 
-      const [threadsResult, snapshotResult] = await Promise.allSettled([
-        listThreads(),
-        getCurrentSnapshot(),
-      ])
-
-      if (threadsResult.status === 'fulfilled') {
-        const threads = threadsResult.value
+      try {
+        const threads = await listThreads()
         dispatch({ type: 'THREADS_LOADED', threads })
         const preferredId = stateRef.current.activeThreadId
         const recentThread = threads.find((thread) => thread.id === preferredId) ?? threads[0]
         if (recentThread) {
+          const cachedState = readThreadIntegrationCache(authUserId, recentThread.id)
+          const generation = nextThreadGeneration()
+          activeThreadIdRef.current = recentThread.id
+          clearThreadRequestRefs()
+          dispatch({ type: 'THREAD_SWITCH_STARTED', thread: recentThread, generation })
+          const scope = { userId: authUserId, threadId: recentThread.id, generation }
           try {
             const aggregate = await getThread(recentThread.id)
-            dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+            if (!isRequestCurrent(scope)) return
+            dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate, scope })
+            dispatch({ type: 'THREAD_DRAFT_RESTORED', cachedState, scope })
+            dispatch({ type: 'API_SYNC_COMPLETED', scope })
           } catch (error) {
-            firstError = error
+            if (!isRequestCurrent(scope)) return
+            dispatch({
+              type: 'THREAD_SWITCH_FAILED',
+              scope,
+              cachedState,
+              error: toApiErrorState(error),
+            })
           }
+          return
         }
-      } else {
-        firstError = threadsResult.reason
+        const snapshot = await getCurrentSnapshot()
+        dispatch({ type: 'SNAPSHOT_LOADED', snapshot })
+        dispatch({ type: 'API_SYNC_COMPLETED' })
+      } catch (error) {
+        dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(error) })
       }
-
-      if (snapshotResult.status === 'fulfilled') {
-        dispatch({ type: 'SNAPSHOT_LOADED', snapshot: snapshotResult.value })
-      } else {
-        firstError ??= snapshotResult.reason
-      }
-
-      if (firstError) dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(firstError) })
-      else dispatch({ type: 'API_SYNC_COMPLETED' })
     }
 
     void hydrate()
   }, [])
 
-  const startCalibration = useCallback(async () => {
-    if (stateRef.current.activeThreadId) {
-      dispatch({ type: 'START_CALIBRATION' })
-      return true
-    }
-    if (createThreadRequestRef.current) return createThreadRequestRef.current
+  const switchThread = useCallback(async (threadId: string) => {
+    const current = stateRef.current
+    const thread = current.availableThreads.find((item) => item.id === threadId)
+    const auth = readAuthSession()
+    if (!thread || !auth || thread.userId !== auth.userId) return false
 
+    writeIntegrationCache(current)
+    const cachedState = readThreadIntegrationCache(auth.userId, thread.id)
+    const generation = nextThreadGeneration()
+    activeThreadIdRef.current = thread.id
+    clearThreadRequestRefs()
+    dispatch({ type: 'THREAD_SWITCH_STARTED', thread, generation })
+    const scope: RequestScope = { userId: auth.userId, threadId: thread.id, generation }
+
+    try {
+      const aggregate = await getThread(thread.id)
+      if (!isRequestCurrent(scope)) return false
+      dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate, scope })
+      dispatch({ type: 'THREAD_DRAFT_RESTORED', cachedState, scope })
+      dispatch({ type: 'API_SYNC_COMPLETED', scope })
+      return true
+    } catch (error) {
+      if (!isRequestCurrent(scope)) return false
+      dispatch({
+        type: 'THREAD_SWITCH_FAILED',
+        scope,
+        cachedState,
+        error: toApiErrorState(error),
+      })
+      return false
+    }
+  }, [])
+
+  const createNewThread = useCallback(async () => {
+    if (createThreadRequestRef.current) return createThreadRequestRef.current
+    const requestGeneration = threadGenerationRef.current
+    writeIntegrationCache(stateRef.current)
     const request = (async () => {
       dispatch({ type: 'API_REQUEST_STARTED' })
       try {
-        const thread = await createThread('XUANOS 暑假开发')
-        dispatch({ type: 'THREAD_CREATED', thread })
+        const auth = await ensureAuthSession()
+        const titleIndex = stateRef.current.availableThreads.length + 1
+        const thread = await createThreadOnServer(`XUANOS 任务 ${titleIndex}`)
+        if (
+          readAuthSession()?.userId !== auth.userId
+          || thread.userId !== auth.userId
+          || threadGenerationRef.current !== requestGeneration
+        ) return false
+        const generation = nextThreadGeneration()
+        activeThreadIdRef.current = thread.id
+        clearThreadRequestRefs()
+        dispatch({ type: 'THREAD_CREATED', thread, generation })
         return true
       } catch (error) {
         dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(error) })
@@ -154,16 +238,31 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const startCalibration = useCallback(async () => {
+    if (stateRef.current.activeThreadId) {
+      if (stateRef.current.serverStep === 'idle') dispatch({ type: 'START_CALIBRATION' })
+      return true
+    }
+    return createNewThread()
+  }, [createNewThread])
+
   const refreshSnapshot = useCallback(async () => {
     if (snapshotRequestRef.current) return snapshotRequestRef.current
+    const scope = requestScope()
     const request = (async () => {
       dispatch({ type: 'API_REQUEST_STARTED' })
       try {
         const snapshot = await getCurrentSnapshot()
-        dispatch({ type: 'SNAPSHOT_LOADED', snapshot })
-        dispatch({ type: 'API_SYNC_COMPLETED' })
+        if (scope && !isRequestCurrent(scope)) return
+        dispatch({ type: 'SNAPSHOT_LOADED', snapshot, scope: scope ?? undefined })
+        dispatch({ type: 'API_SYNC_COMPLETED', scope: scope ?? undefined })
       } catch (error) {
-        dispatch({ type: 'API_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (scope && !isRequestCurrent(scope)) return
+        dispatch({
+          type: 'API_REQUEST_FAILED',
+          error: toApiErrorState(error),
+          scope: scope ?? undefined,
+        })
       }
     })()
     snapshotRequestRef.current = request
@@ -188,14 +287,18 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const runUnderstandingAnalyze = useCallback(
     async (input: Parameters<typeof analyzeUnderstanding>[0]) => {
       if (understandingRequestRef.current) return understandingRequestRef.current
+      const scope = requestScope(input.threadId)
+      if (!scope) return false
       const request = (async () => {
         dispatch({ type: 'UNDERSTANDING_REQUEST_STARTED' })
         try {
           const result = await analyzeUnderstanding(input)
-          dispatch({ type: 'UNDERSTANDING_ANALYZE_SUCCEEDED', result })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'UNDERSTANDING_ANALYZE_SUCCEEDED', result, scope })
           return true
         } catch (error) {
-          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error) })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error), scope })
           return false
         }
       })()
@@ -269,18 +372,22 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
       }
       if (current.understandingRequestStatus === 'loading') return false
       if (understandingRequestRef.current) return understandingRequestRef.current
+      const scope = requestScope(current.activeThreadId)
+      if (!scope) return failUnderstandingGuard('当前任务线程无效，请重新选择任务。')
 
       const request = (async () => {
         dispatch({ type: 'UNDERSTANDING_REQUEST_STARTED' })
         try {
-          const result = await confirmUnderstandingOnServer(sessionId, {
+          const result = await confirmUnderstandingOnServer(sessionId, scope.threadId, {
             assessment,
             correction,
           })
-          dispatch({ type: 'UNDERSTANDING_CONFIRM_SUCCEEDED', result })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'UNDERSTANDING_CONFIRM_SUCCEEDED', result, scope })
           return true
         } catch (error) {
-          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error) })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'UNDERSTANDING_REQUEST_FAILED', error: toApiErrorState(error), scope })
           return false
         }
       })()
@@ -330,6 +437,8 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     ) return failPlanGuard('服务端理解尚未确认，不能创建计划。')
     if (current.isOfflineCache) return failPlanGuard('当前为离线缓存，恢复服务后才能创建计划。')
     if (current.planRequestStatus === 'loading') return false
+    const scope = requestScope(current.activeThreadId)
+    if (!scope) return failPlanGuard('当前任务线程无效，请重新选择任务。')
 
     return runPlanRequest(async () => {
       dispatch({ type: 'PLAN_REQUEST_STARTED' })
@@ -339,10 +448,12 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
           understandingSessionId: current.understandingSessionId!,
           mainGoal: current.serverUnderstanding!.realGoal,
         })
-        dispatch({ type: 'PLAN_CREATE_SUCCEEDED', result })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_CREATE_SUCCEEDED', result, scope })
         return true
       } catch (error) {
-        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error), scope })
         return false
       }
     })
@@ -360,21 +471,26 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     if (!draft.userChoice.trim()) return failPlanGuard('请填写用户最终选择。')
     if (!draft.expectedImpactAcknowledged) return failPlanGuard('请确认已了解本次修改的预计影响。')
     if (current.planRequestStatus === 'loading') return false
+    const scope = requestScope(current.activeThreadId)
+    if (!scope) return failPlanGuard('当前任务线程无效，请重新选择任务。')
 
     return runPlanRequest(async () => {
       dispatch({ type: 'PLAN_REQUEST_STARTED' })
       try {
         const result = await revisePlanOnServer({
+          threadId: scope.threadId,
           plan,
           reason: draft.reason!,
           userChoice: draft.userChoice,
           expectedImpactAcknowledged: draft.expectedImpactAcknowledged,
           mainGoal: current.serverUnderstanding?.realGoal ?? plan.mainGoal,
         })
-        dispatch({ type: 'PLAN_REVISE_SUCCEEDED', result })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_REVISE_SUCCEEDED', result, scope })
         return true
       } catch (error) {
-        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error), scope })
         return false
       }
     })
@@ -391,18 +507,23 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
       return failPlanGuard('当前服务端流程状态不允许接受计划。')
     }
     if (current.planRequestStatus === 'loading') return false
+    const scope = requestScope(current.activeThreadId)
+    if (!scope) return failPlanGuard('当前任务线程无效，请重新选择任务。')
 
     return runPlanRequest(async () => {
       dispatch({ type: 'PLAN_REQUEST_STARTED' })
       try {
         const result = await acceptPlanOnServer({
+          threadId: scope.threadId,
           plan,
           mainGoal: current.serverUnderstanding?.realGoal ?? plan.mainGoal,
         })
-        dispatch({ type: 'PLAN_ACCEPT_SUCCEEDED', result })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_ACCEPT_SUCCEEDED', result, scope })
         return true
       } catch (error) {
-        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error), scope })
         return false
       }
     })
@@ -411,15 +532,19 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
   const refreshActiveThread = useCallback(async () => {
     const threadId = stateRef.current.activeThreadId
     if (!threadId) return failPlanGuard('当前没有可恢复的任务线程。')
+    const scope = requestScope(threadId)
+    if (!scope) return failPlanGuard('当前任务线程无效，请重新选择任务。')
     return runPlanRequest(async () => {
       dispatch({ type: 'PLAN_REQUEST_STARTED' })
       try {
         const aggregate = await getThread(threadId)
-        dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
-        dispatch({ type: 'API_SYNC_COMPLETED' })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate, scope })
+        dispatch({ type: 'API_SYNC_COMPLETED', scope })
         return true
       } catch (error) {
-        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'PLAN_REQUEST_FAILED', error: toApiErrorState(error), scope })
         return false
       }
     })
@@ -464,6 +589,8 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     }
     if (current.actionResultRequestStatus === 'loading') return false
     if (actionResultRequestRef.current) return actionResultRequestRef.current
+    const scope = requestScope(current.activeThreadId)
+    if (!scope) return failActionResultGuard('当前任务线程无效，请重新选择任务。')
 
     const request = (async () => {
       dispatch({ type: 'ACTION_RESULT_REQUEST_STARTED' })
@@ -476,16 +603,20 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
           feedback,
           previousSnapshot: current.latestSnapshot ?? current.serverSnapshot,
         })
-        dispatch({ type: 'ACTION_RESULT_SUCCEEDED', result })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'ACTION_RESULT_SUCCEEDED', result, scope })
         try {
-          const aggregate = await getThread(current.activeThreadId!)
-          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+          const aggregate = await getThread(scope.threadId)
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate, scope })
         } catch (error) {
-          dispatch({ type: 'ACTION_RESULT_READBACK_FAILED', error: toApiErrorState(error) })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'ACTION_RESULT_READBACK_FAILED', error: toApiErrorState(error), scope })
         }
         return true
       } catch (error) {
-        dispatch({ type: 'ACTION_RESULT_REQUEST_FAILED', error: toApiErrorState(error) })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'ACTION_RESULT_REQUEST_FAILED', error: toApiErrorState(error), scope })
         return false
       }
     })()
@@ -531,41 +662,51 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
     }
     if (current.correctionRequestStatus === 'loading') return false
     if (correctionRequestRef.current) return correctionRequestRef.current
+    const scope = requestScope(current.activeThreadId)
+    if (!scope) return failCorrectionGuard('当前任务线程无效，请重新选择任务。')
 
     const request = (async () => {
       dispatch({ type: 'CORRECTION_REQUEST_STARTED' })
       try {
         const result = await submitUserCorrection({
+          threadId: scope.threadId,
           target,
           correctionType: correctionType as CorrectionType,
           correctedValue: current.correctionDraft,
           reason: current.correctionReason,
           previousSnapshot: snapshot,
         })
-        dispatch({ type: 'CORRECTION_REQUEST_SUCCEEDED', result })
+        if (!isRequestCurrent(scope)) return false
+        dispatch({ type: 'CORRECTION_REQUEST_SUCCEEDED', result, scope })
         try {
-          const aggregate = await getThread(current.activeThreadId!)
-          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate })
+          const aggregate = await getThread(scope.threadId)
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'THREAD_AGGREGATE_LOADED', aggregate, scope })
         } catch (error) {
-          dispatch({ type: 'CORRECTION_READBACK_FAILED', error: toApiErrorState(error) })
+          if (!isRequestCurrent(scope)) return false
+          dispatch({ type: 'CORRECTION_READBACK_FAILED', error: toApiErrorState(error), scope })
         }
         return true
       } catch (error) {
+        if (!isRequestCurrent(scope)) return false
         const normalized = normalizeApiError(error)
         const correctionError = toCorrectionApiErrorState(normalized)
         if (normalized.code === 'STALE_SNAPSHOT') {
           try {
             const latestSnapshot = await getCurrentSnapshot()
+            if (!isRequestCurrent(scope)) return false
             dispatch({
               type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED',
               snapshot: latestSnapshot,
               error: correctionError,
+              scope,
             })
           } catch {
-            dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError })
+            if (!isRequestCurrent(scope)) return false
+            dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError, scope })
           }
         } else {
-          dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError })
+          dispatch({ type: 'CORRECTION_REQUEST_FAILED', error: correctionError, scope })
         }
         return false
       }
@@ -589,6 +730,8 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
         state,
         dispatch,
         resetDemo,
+        switchThread,
+        createNewThread,
         startCalibration,
         refreshSnapshot,
         selectExpressionMode,

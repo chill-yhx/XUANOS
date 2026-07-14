@@ -72,6 +72,7 @@ export function planMapper(dto: PlanDto, mainGoal: string): PlanVersion {
 
   return {
     id: dto.id,
+    threadId: dto.thread_id,
     rootPlanId: dto.root_plan_id,
     previousPlanId: dto.previous_plan_id,
     understandingSessionId: dto.understanding_session_id,
@@ -108,6 +109,7 @@ export interface CreatePlanInput {
 }
 
 export interface RevisePlanInput {
+  threadId: string
   plan: PlanVersion
   reason: PlanModificationReason
   userChoice: string
@@ -116,6 +118,7 @@ export interface RevisePlanInput {
 }
 
 export interface AcceptPlanInput {
+  threadId: string
   plan: PlanVersion
   mainGoal: string
 }

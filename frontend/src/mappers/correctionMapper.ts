@@ -38,6 +38,7 @@ const fallbackReasons: Record<CorrectionType, string> = {
 }
 
 export interface SubmitCorrectionInput {
+  threadId: string
   target: CorrectionTarget
   correctionType: CorrectionType
   correctedValue: string

@@ -5048,3 +5048,75 @@
     flex-direction: column;
   }
 }
+
+.top-thread-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.top-thread-select {
+  width: 142px;
+  height: 28px;
+  padding: 0 24px 0 9px;
+  border: 1px solid rgba(243, 239, 229, 0.07);
+  border-radius: 5px;
+  background: rgba(9, 8, 6, 0.34);
+  color: rgba(243, 239, 229, 0.48);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0;
+  outline: none;
+}
+
+.top-thread-select:focus-visible,
+.top-thread-add:focus-visible {
+  border-color: rgba(217, 195, 143, 0.32);
+  outline: 2px solid rgba(217, 195, 143, 0.12);
+  outline-offset: 2px;
+}
+
+.top-thread-add {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(243, 239, 229, 0.07);
+  border-radius: 50%;
+  background: rgba(9, 8, 6, 0.34);
+  color: rgba(243, 239, 229, 0.48);
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.top-thread-add:hover {
+  border-color: rgba(217, 195, 143, 0.22);
+  color: rgba(243, 239, 229, 0.78);
+}
+
+.top-thread-select:disabled,
+.top-thread-add:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+@media (max-width: 760px) {
+  .top-thread-select {
+    width: 112px;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-thread-select {
+    width: 92px;
+  }
+
+  .top-thread-tools .top-system-link {
+    display: none;
+  }
+}

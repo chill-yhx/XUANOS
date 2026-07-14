@@ -13,6 +13,7 @@ import type {
   PlanModificationDraft,
   PlanReviseResult,
   PlanVersion,
+  RequestScope,
   SystemSnapshot,
   ThreadAggregateState,
   UnderstandingAnalyzeResult,
@@ -21,17 +22,21 @@ import type {
   UserCorrectionResult,
 } from '../types'
 import { createInitialSession, initialFeedback } from './initialState'
+import { serverRecoveryStep, uiRecoveryStep } from './threadRecovery'
 import { laterInteractionStep } from './workflowSteps'
 
 export type InteractionAction =
   | { type: 'AUTH_SESSION_INVALIDATED'; error: ApiErrorState }
   | { type: 'API_REQUEST_STARTED' }
-  | { type: 'API_REQUEST_FAILED'; error: ApiErrorState }
-  | { type: 'API_SYNC_COMPLETED' }
+  | { type: 'API_REQUEST_FAILED'; error: ApiErrorState; scope?: RequestScope }
+  | { type: 'API_SYNC_COMPLETED'; scope?: RequestScope }
   | { type: 'THREADS_LOADED'; threads: ActiveThread[] }
-  | { type: 'THREAD_CREATED'; thread: ActiveThread }
-  | { type: 'THREAD_AGGREGATE_LOADED'; aggregate: ThreadAggregateState }
-  | { type: 'SNAPSHOT_LOADED'; snapshot: SystemSnapshot }
+  | { type: 'THREAD_CREATED'; thread: ActiveThread; generation: number }
+  | { type: 'THREAD_SWITCH_STARTED'; thread: ActiveThread; generation: number }
+  | { type: 'THREAD_SWITCH_FAILED'; scope: RequestScope; error: ApiErrorState; cachedState: DemoSessionState | null }
+  | { type: 'THREAD_DRAFT_RESTORED'; scope: RequestScope; cachedState: DemoSessionState | null }
+  | { type: 'THREAD_AGGREGATE_LOADED'; aggregate: ThreadAggregateState; scope: RequestScope }
+  | { type: 'SNAPSHOT_LOADED'; snapshot: SystemSnapshot; scope?: RequestScope }
   | { type: 'START_CALIBRATION' }
   | { type: 'SELECT_EXPRESSION_MODE'; mode: ExpressionMode }
   | { type: 'UPDATE_USER_INPUT'; value: string }
@@ -39,24 +44,24 @@ export type InteractionAction =
   | { type: 'UPDATE_UNDERSTANDING_ASSESSMENT'; assessment: UnderstandingAssessment | null }
   | { type: 'UPDATE_UNDERSTANDING_CORRECTION'; value: string }
   | { type: 'UNDERSTANDING_REQUEST_STARTED' }
-  | { type: 'UNDERSTANDING_ANALYZE_SUCCEEDED'; result: UnderstandingAnalyzeResult }
-  | { type: 'UNDERSTANDING_CONFIRM_SUCCEEDED'; result: UnderstandingConfirmResult }
-  | { type: 'UNDERSTANDING_REQUEST_FAILED'; error: ApiErrorState }
+  | { type: 'UNDERSTANDING_ANALYZE_SUCCEEDED'; result: UnderstandingAnalyzeResult; scope: RequestScope }
+  | { type: 'UNDERSTANDING_CONFIRM_SUCCEEDED'; result: UnderstandingConfirmResult; scope: RequestScope }
+  | { type: 'UNDERSTANDING_REQUEST_FAILED'; error: ApiErrorState; scope?: RequestScope }
   | { type: 'GO_TO_PREVIOUS_QUESTION' }
   | { type: 'UPDATE_PLAN_MODIFICATION_DRAFT'; value: Partial<PlanModificationDraft> }
   | { type: 'SELECT_PLAN_VERSION'; planId: string }
   | { type: 'PLAN_REQUEST_STARTED' }
-  | { type: 'PLAN_CREATE_SUCCEEDED'; result: PlanCreateResult }
-  | { type: 'PLAN_REVISE_SUCCEEDED'; result: PlanReviseResult }
-  | { type: 'PLAN_ACCEPT_SUCCEEDED'; result: PlanAcceptResult }
-  | { type: 'PLAN_REQUEST_FAILED'; error: ApiErrorState }
+  | { type: 'PLAN_CREATE_SUCCEEDED'; result: PlanCreateResult; scope: RequestScope }
+  | { type: 'PLAN_REVISE_SUCCEEDED'; result: PlanReviseResult; scope: RequestScope }
+  | { type: 'PLAN_ACCEPT_SUCCEEDED'; result: PlanAcceptResult; scope: RequestScope }
+  | { type: 'PLAN_REQUEST_FAILED'; error: ApiErrorState; scope?: RequestScope }
   | { type: 'REOPEN_QUESTIONS' }
   | { type: 'START_ACTION' }
   | { type: 'UPDATE_FEEDBACK_DRAFT'; value: Partial<FeedbackPayload> }
   | { type: 'ACTION_RESULT_REQUEST_STARTED' }
-  | { type: 'ACTION_RESULT_SUCCEEDED'; result: ActionSubmissionResult }
-  | { type: 'ACTION_RESULT_REQUEST_FAILED'; error: ApiErrorState }
-  | { type: 'ACTION_RESULT_READBACK_FAILED'; error: ApiErrorState }
+  | { type: 'ACTION_RESULT_SUCCEEDED'; result: ActionSubmissionResult; scope: RequestScope }
+  | { type: 'ACTION_RESULT_REQUEST_FAILED'; error: ApiErrorState; scope?: RequestScope }
+  | { type: 'ACTION_RESULT_READBACK_FAILED'; error: ApiErrorState; scope: RequestScope }
   | { type: 'OPEN_CORRECTION_TARGET'; target: CorrectionTarget }
   | { type: 'CLOSE_CORRECTION_TARGET' }
   | { type: 'UPDATE_CORRECTION_TYPE'; correctionType: CorrectionType | null }
@@ -64,10 +69,10 @@ export type InteractionAction =
   | { type: 'UPDATE_CORRECTION_REASON'; value: string }
   | { type: 'UPDATE_CORRECTION_CONFIRMATION'; confirmed: boolean }
   | { type: 'CORRECTION_REQUEST_STARTED' }
-  | { type: 'CORRECTION_REQUEST_SUCCEEDED'; result: UserCorrectionResult }
-  | { type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED'; snapshot: SystemSnapshot; error: ApiErrorState }
-  | { type: 'CORRECTION_REQUEST_FAILED'; error: ApiErrorState }
-  | { type: 'CORRECTION_READBACK_FAILED'; error: ApiErrorState }
+  | { type: 'CORRECTION_REQUEST_SUCCEEDED'; result: UserCorrectionResult; scope: RequestScope }
+  | { type: 'CORRECTION_STALE_SNAPSHOT_REFRESHED'; snapshot: SystemSnapshot; error: ApiErrorState; scope: RequestScope }
+  | { type: 'CORRECTION_REQUEST_FAILED'; error: ApiErrorState; scope?: RequestScope }
+  | { type: 'CORRECTION_READBACK_FAILED'; error: ApiErrorState; scope: RequestScope }
   | { type: 'RESET_DEMO_DATA' }
 
 function withThread(state: DemoSessionState, status: string, phase = state.uiThreadPhase): DemoSessionState {
@@ -104,7 +109,102 @@ function mergePlans(plans: PlanVersion[], ...updates: PlanVersion[]) {
   return [...byId.values()].sort((left, right) => left.version - right.version)
 }
 
+function requestScopeMatches(state: DemoSessionState, scope: RequestScope) {
+  const currentUserId = state.activeThread?.userId ?? state.serverSnapshot?.userId ?? null
+  return state.activeThreadGeneration === scope.generation
+    && state.activeThreadId === scope.threadId
+    && (!currentUserId || currentUserId === scope.userId)
+}
+
+function resetThreadScopedState(
+  state: DemoSessionState,
+  thread: ActiveThread,
+  generation: number,
+): DemoSessionState {
+  const reset = createInitialSession()
+  return {
+    ...reset,
+    activeThreadGeneration: generation,
+    activeThread: thread,
+    activeThreadId: thread.id,
+    availableThreads: mergeThread(state.availableThreads, thread),
+    serverStep: thread.currentStep,
+    currentStep: uiRecoveryStep(thread.currentStep, null),
+    uiThreadStatus: thread.status,
+    uiThreadPhase: thread.phase,
+    isLoading: true,
+    dataSource: 'none',
+  }
+}
+
+function restoreThreadDrafts(state: DemoSessionState, cached: DemoSessionState | null): DemoSessionState {
+  if (!cached || cached.activeThreadId !== state.activeThreadId) return state
+
+  const hasServerSession = Boolean(state.activeUnderstandingSession)
+  const sameQuestion = Boolean(
+    state.currentQuestion
+    && cached.currentQuestion?.id === state.currentQuestion.id
+    && cached.understandingSessionId === state.understandingSessionId,
+  )
+  const samePlan = Boolean(state.activePlanId && cached.activePlanId === state.activePlanId)
+  const sameSnapshot = Boolean(
+    state.latestSnapshot?.id
+    && cached.latestSnapshot?.id === state.latestSnapshot.id
+    && cached.latestSnapshot.version === state.latestSnapshot.version,
+  )
+  const correctionIsCurrent = Boolean(
+    sameSnapshot
+    && cached.activeCorrectionTarget?.snapshotId === state.latestSnapshot?.id
+    && cached.activeCorrectionTarget?.snapshotVersion === state.latestSnapshot?.version,
+  )
+  const comparisonIsCurrent = Boolean(
+    sameSnapshot
+    && cached.snapshotDiff?.toSnapshotId === state.latestSnapshot?.id,
+  )
+  const expressionMode = hasServerSession
+    ? state.expressionMode
+    : cached.expressionMode
+
+  return {
+    ...state,
+    currentStep: state.serverStep === 'idle'
+      ? uiRecoveryStep(state.serverStep, expressionMode)
+      : state.currentStep,
+    expressionMode,
+    userInput: hasServerSession ? state.userInput : cached.userInput,
+    currentAnswerDraft: sameQuestion ? cached.currentAnswerDraft : '',
+    understandingAssessmentDraft: state.currentStep === 'reviewing_understanding'
+      ? cached.understandingAssessmentDraft
+      : null,
+    understandingCorrectionDraft: state.currentStep === 'reviewing_understanding'
+      ? cached.understandingCorrectionDraft
+      : '',
+    planModificationDraft: samePlan
+      ? cached.planModificationDraft
+      : { reason: null, userChoice: '', expectedImpactAcknowledged: false },
+    actionFeedback: samePlan && cached.actionFeedback.planId === state.activePlanId
+      ? cached.actionFeedback
+      : { ...initialFeedback },
+    previousSnapshot: comparisonIsCurrent ? cached.previousSnapshot : null,
+    snapshotDiff: comparisonIsCurrent ? cached.snapshotDiff : null,
+    activeCorrectionTarget: correctionIsCurrent ? cached.activeCorrectionTarget : null,
+    correctionType: correctionIsCurrent ? cached.correctionType : null,
+    correctionDraft: correctionIsCurrent ? cached.correctionDraft : '',
+    correctionReason: correctionIsCurrent ? cached.correctionReason : '',
+    correctionDiscontinueConfirmed: correctionIsCurrent
+      ? cached.correctionDiscontinueConfirmed
+      : false,
+    latestCorrectionId: sameSnapshot ? cached.latestCorrectionId : state.latestCorrectionId,
+    latestCorrectionAt: sameSnapshot ? cached.latestCorrectionAt : state.latestCorrectionAt,
+    latestCorrectionResult: sameSnapshot ? cached.latestCorrectionResult : state.latestCorrectionResult,
+    correctionSource: sameSnapshot && cached.latestCorrectionResult ? 'cache' : state.correctionSource,
+  }
+}
+
 export function interactionReducer(state: DemoSessionState, action: InteractionAction): DemoSessionState {
+  const scope = 'scope' in action ? action.scope : undefined
+  if (scope && !requestScopeMatches(state, scope)) return state
+
   switch (action.type) {
     case 'AUTH_SESSION_INVALIDATED':
       return {
@@ -136,22 +236,63 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
     case 'THREADS_LOADED':
       {
         const activeThread = action.threads.find((thread) => thread.id === state.activeThreadId) ?? null
+        if (state.activeThreadId && !activeThread) {
+          return {
+            ...createInitialSession(),
+            activeThreadGeneration: state.activeThreadGeneration,
+            availableThreads: action.threads,
+            apiError: null,
+            dataSource: 'api',
+          }
+        }
         return {
           ...state,
-          activeThread,
-          activeThreadId: activeThread?.id ?? null,
+          activeThread: activeThread ?? state.activeThread,
+          activeThreadId: activeThread?.id ?? state.activeThreadId,
           availableThreads: action.threads,
           apiError: null,
           dataSource: 'api',
         }
       }
 
-    case 'THREAD_CREATED':
+    case 'THREAD_SWITCH_STARTED':
+      return resetThreadScopedState(state, action.thread, action.generation)
+
+    case 'THREAD_SWITCH_FAILED': {
+      if (!action.cachedState) {
+        return {
+          ...state,
+          isLoading: false,
+          apiError: action.error,
+          isOfflineCache: false,
+          dataSource: 'none',
+        }
+      }
       return {
-        ...state,
-        activeThread: action.thread,
-        activeThreadId: action.thread.id,
-        availableThreads: mergeThread(state.availableThreads, action.thread),
+        ...action.cachedState,
+        activeThreadGeneration: action.scope.generation,
+        activeThread: state.activeThread,
+        activeThreadId: state.activeThreadId,
+        availableThreads: state.availableThreads,
+        isLoading: false,
+        apiError: action.error,
+        isOfflineCache: true,
+        dataSource: 'cache',
+        understandingSource: action.cachedState.serverUnderstanding ? 'cache' : 'none',
+        planSource: action.cachedState.currentPlan ? 'cache' : 'none',
+        actionResultSource: action.cachedState.latestActionResult ? 'cache' : 'none',
+        systemRevisionSource: action.cachedState.systemRevision ? 'cache' : 'none',
+        correctionSource: action.cachedState.latestCorrectionResult ? 'cache' : 'none',
+      }
+    }
+
+    case 'THREAD_DRAFT_RESTORED':
+      return restoreThreadDrafts(state, action.cachedState)
+
+    case 'THREAD_CREATED': {
+      const reset = resetThreadScopedState(state, action.thread, action.generation)
+      return {
+        ...reset,
         serverStep: action.thread.currentStep,
         currentStep: 'expression_mode',
         uiThreadStatus: action.thread.status,
@@ -221,25 +362,30 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         isOfflineCache: false,
         dataSource: 'api',
       }
+    }
 
     case 'THREAD_AGGREGATE_LOADED': {
       const aggregate = action.aggregate
+      if (
+        aggregate.thread.id !== action.scope.threadId
+        || aggregate.thread.userId !== action.scope.userId
+      ) return state
       const sameThread = state.activeThreadId === aggregate.thread.id
       const hasLiveServerState = sameThread && state.dataSource === 'api' && !state.isOfflineCache
+      const aggregateStep = serverRecoveryStep(aggregate)
       const serverStep = hasLiveServerState
-        ? laterInteractionStep(state.serverStep, aggregate.serverStep)
-        : aggregate.serverStep
+        ? laterInteractionStep(state.serverStep, aggregateStep)
+        : aggregateStep
       const thread = serverStep === aggregate.thread.currentStep
         ? aggregate.thread
         : { ...aggregate.thread, currentStep: serverStep }
-      const useServerWorkflow = serverStep !== 'idle'
-      const preserveLocalDraft = sameThread && !useServerWorkflow
       const activeSession = aggregate.activeUnderstandingSession
-      const serverUnderstanding = useServerWorkflow ? aggregate.understanding : state.serverUnderstanding
       const preserveAnswerDraft = sameThread
-        && state.currentQuestionIndex === aggregate.currentQuestionIndex
+        && state.understandingSessionId === activeSession?.id
+        && state.currentQuestion?.id === aggregate.currentQuestion?.id
       const sameActionResult = Boolean(
-        aggregate.latestActionResult
+        sameThread
+        && aggregate.latestActionResult
         && aggregate.latestActionResult.id === state.latestActionResult?.id,
       )
       const latestActionResult = sameActionResult
@@ -254,95 +400,103 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
         : aggregate.latestActionResult
       const preserveFeedbackDraft = Boolean(
         sameThread
-        && state.currentStep === 'action_pending'
         && aggregate.currentPlan?.status === 'accepted'
         && state.actionFeedback.planId === aggregate.currentPlan.id,
       )
       const sameCorrectionSnapshot = Boolean(
-        state.latestCorrectionResult
+        sameThread
+        && state.latestCorrectionResult
         && state.latestCorrectionResult.snapshot.id === aggregate.snapshot.id
         && state.latestCorrectionResult.snapshot.version === aggregate.snapshot.version,
       )
       const preserveSnapshotComparison = sameActionResult || sameCorrectionSnapshot
+      const preservePlanDraft = Boolean(
+        sameThread
+        && aggregate.currentPlan
+        && state.activePlanId === aggregate.currentPlan.id,
+      )
+      const currentStep = preserveFeedbackDraft && state.currentStep === 'action_pending'
+        ? 'action_pending'
+        : uiRecoveryStep(serverStep, aggregate.expressionMode ?? state.expressionMode)
       return {
         ...state,
         activeThread: thread,
         activeThreadId: thread.id,
         availableThreads: mergeThread(state.availableThreads, thread),
         serverStep,
-        currentStep: preserveFeedbackDraft
-          ? 'action_pending'
-          : preserveLocalDraft ? state.currentStep : serverStep,
-        uiThreadStatus: preserveLocalDraft ? state.uiThreadStatus : aggregate.thread.status,
-        uiThreadPhase: preserveLocalDraft ? state.uiThreadPhase : aggregate.thread.phase,
-        activeUnderstandingSession: useServerWorkflow
-          ? activeSession
-          : state.activeUnderstandingSession,
-        understandingSessionId: useServerWorkflow
-          ? activeSession?.id ?? null
-          : state.understandingSessionId,
-        understandingStatus: useServerWorkflow
-          ? activeSession?.status ?? 'idle'
-          : state.understandingStatus,
-        understandingConfirmedAt: useServerWorkflow
-          ? activeSession?.confirmedAt ?? null
-          : state.understandingConfirmedAt,
-        serverUnderstanding,
-        understandingRequestStatus: useServerWorkflow ? 'success' : state.understandingRequestStatus,
+        currentStep,
+        uiThreadStatus: aggregate.thread.status,
+        uiThreadPhase: aggregate.thread.phase,
+        activeUnderstandingSession: activeSession,
+        understandingSessionId: activeSession?.id ?? null,
+        understandingStatus: activeSession?.status ?? 'idle',
+        understandingConfirmedAt: activeSession?.confirmedAt ?? null,
+        serverUnderstanding: aggregate.understanding,
+        understandingRequestStatus: activeSession ? 'success' : 'idle',
         understandingApiError: null,
-        understandingSource: useServerWorkflow ? 'api' : state.understandingSource,
-        lastSuccessfulUnderstandingAt: useServerWorkflow
-          ? activeSession?.updatedAt ?? state.lastSuccessfulUnderstandingAt
-          : state.lastSuccessfulUnderstandingAt,
-        expressionMode: useServerWorkflow ? aggregate.expressionMode : state.expressionMode,
-        userInput: useServerWorkflow ? aggregate.userInput : state.userInput,
-        currentAnswerDraft: useServerWorkflow
-          ? preserveAnswerDraft
-            ? state.currentAnswerDraft
-            : aggregate.currentQuestion
-              ? aggregate.answers[aggregate.currentQuestion.id] ?? ''
-              : ''
-          : state.currentAnswerDraft,
-        answers: useServerWorkflow ? aggregate.answers : state.answers,
-        submittedAnswers: useServerWorkflow ? aggregate.answers : state.submittedAnswers,
-        answerMeta: useServerWorkflow ? aggregate.answerMeta : state.answerMeta,
-        currentQuestionIndex: useServerWorkflow
-          ? aggregate.currentQuestionIndex
-          : state.currentQuestionIndex,
-        currentQuestion: useServerWorkflow ? aggregate.currentQuestion : state.currentQuestion,
-        understanding: useServerWorkflow ? aggregate.understanding : state.understanding,
-        corrections: useServerWorkflow ? aggregate.corrections : state.corrections,
-        currentPlan: useServerWorkflow ? aggregate.currentPlan : state.currentPlan,
-        planVersions: useServerWorkflow ? aggregate.planVersions : state.planVersions,
-        activePlanId: useServerWorkflow ? thread.activePlanId : state.activePlanId,
-        planRequestStatus: useServerWorkflow && aggregate.currentPlan ? 'success' : state.planRequestStatus,
+        understandingSource: activeSession || aggregate.understanding ? 'api' : 'none',
+        lastSuccessfulUnderstandingAt: activeSession?.updatedAt ?? null,
+        expressionMode: aggregate.expressionMode ?? (sameThread ? state.expressionMode : null),
+        userInput: activeSession ? aggregate.userInput : sameThread ? state.userInput : '',
+        currentAnswerDraft: preserveAnswerDraft ? state.currentAnswerDraft : '',
+        understandingAssessmentDraft: currentStep === 'reviewing_understanding' && sameThread
+          ? state.understandingAssessmentDraft
+          : null,
+        understandingCorrectionDraft: currentStep === 'reviewing_understanding' && sameThread
+          ? state.understandingCorrectionDraft
+          : '',
+        answers: aggregate.answers,
+        submittedAnswers: aggregate.answers,
+        answerMeta: aggregate.answerMeta,
+        currentQuestionIndex: aggregate.currentQuestionIndex,
+        currentQuestion: aggregate.currentQuestion,
+        understanding: aggregate.understanding,
+        corrections: aggregate.corrections,
+        currentPlan: aggregate.currentPlan,
+        planVersions: aggregate.planVersions,
+        activePlanId: thread.activePlanId,
+        planRequestStatus: aggregate.currentPlan ? 'success' : 'idle',
         planApiError: null,
-        planSource: useServerWorkflow && aggregate.currentPlan ? 'api' : state.planSource,
-        lastSuccessfulPlanAt: useServerWorkflow && aggregate.currentPlan
+        planSource: aggregate.currentPlan ? 'api' : 'none',
+        lastSuccessfulPlanAt: aggregate.currentPlan
           ? aggregate.currentPlan.updatedAt ?? aggregate.currentPlan.createdAt
-          : state.lastSuccessfulPlanAt,
-        lastViewedPlanId: useServerWorkflow && aggregate.currentPlan
-          ? aggregate.planVersions.some((plan) => plan.id === state.lastViewedPlanId)
+          : null,
+        lastViewedPlanId: aggregate.currentPlan
+          ? sameThread && aggregate.planVersions.some((plan) => plan.id === state.lastViewedPlanId)
             ? state.lastViewedPlanId
             : aggregate.currentPlan.id
-          : state.lastViewedPlanId,
+          : null,
+        planModificationDraft: preservePlanDraft
+          ? state.planModificationDraft
+          : { reason: null, userChoice: '', expectedImpactAcknowledged: false },
+        actionFeedback: preserveFeedbackDraft ? state.actionFeedback : { ...initialFeedback },
         latestActionResult,
-        systemRevision: useServerWorkflow ? aggregate.systemRevision : state.systemRevision,
+        systemRevision: aggregate.systemRevision,
         actionResultId: latestActionResult?.id ?? null,
         actionResultStatus: latestActionResult?.resultStatus ?? null,
         actionResultSubmittedAt: latestActionResult?.submittedAt ?? null,
         actionResultRequestStatus: latestActionResult ? 'success' : 'idle',
         actionResultApiError: null,
-        actionResultSource: latestActionResult ? 'api' : state.actionResultSource,
+        actionResultSource: latestActionResult ? 'api' : 'none',
         latestSnapshot: aggregate.snapshot,
         previousSnapshot: preserveSnapshotComparison ? state.previousSnapshot : null,
         snapshotDiff: preserveSnapshotComparison ? state.snapshotDiff : null,
         latestActionHypothesis: sameActionResult ? state.latestActionHypothesis : null,
-        systemRevisionSource: aggregate.systemRevision ? 'api' : state.systemRevisionSource,
-        systemRevisionAt: latestActionResult?.submittedAt ?? state.systemRevisionAt,
-        correctionRequestStatus: sameCorrectionSnapshot ? 'success' : state.correctionRequestStatus,
+        systemRevisionSource: aggregate.systemRevision ? 'api' : 'none',
+        systemRevisionAt: latestActionResult?.submittedAt ?? null,
+        activeCorrectionTarget: sameCorrectionSnapshot ? state.activeCorrectionTarget : null,
+        correctionType: sameCorrectionSnapshot ? state.correctionType : null,
+        correctionDraft: sameCorrectionSnapshot ? state.correctionDraft : '',
+        correctionReason: sameCorrectionSnapshot ? state.correctionReason : '',
+        correctionDiscontinueConfirmed: sameCorrectionSnapshot
+          ? state.correctionDiscontinueConfirmed
+          : false,
+        correctionRequestStatus: sameCorrectionSnapshot ? 'success' : 'idle',
         correctionApiError: null,
-        correctionSource: sameCorrectionSnapshot ? 'api' : state.correctionSource,
+        latestCorrectionId: sameCorrectionSnapshot ? state.latestCorrectionId : null,
+        latestCorrectionAt: sameCorrectionSnapshot ? state.latestCorrectionAt : null,
+        latestCorrectionResult: sameCorrectionSnapshot ? state.latestCorrectionResult : null,
+        correctionSource: sameCorrectionSnapshot ? 'api' : 'none',
         serverSnapshot: aggregate.snapshot,
         snapshotId: aggregate.snapshot.id,
         snapshotVersion: aggregate.snapshot.version,
@@ -354,6 +508,8 @@ export function interactionReducer(state: DemoSessionState, action: InteractionA
     }
 
     case 'SNAPSHOT_LOADED':
+      if (action.snapshot.userId && state.activeThread?.userId
+        && action.snapshot.userId !== state.activeThread.userId) return state
       if (state.serverSnapshot && action.snapshot.version < state.serverSnapshot.version) return state
       {
         const comparisonIsCurrent = state.snapshotDiff?.toSnapshotId === action.snapshot.id

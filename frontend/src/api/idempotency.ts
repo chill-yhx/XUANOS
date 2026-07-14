@@ -1,6 +1,7 @@
 import { readAuthSession } from './authSession'
 
-const STORAGE_PREFIX = 'xuanos:idempotency:v2'
+const STORAGE_PREFIX = 'xuanos:idempotency:v3'
+const LEGACY_STORAGE_PREFIX = 'xuanos:idempotency:v2'
 
 interface PendingIdempotency {
   key: string
@@ -10,13 +11,13 @@ interface PendingIdempotency {
 
 type PendingStore = Record<string, PendingIdempotency>
 
-function storageKey(userId = readAuthSession()?.userId): string | null {
-  return userId ? `${STORAGE_PREFIX}:${userId}` : null
+function storageKey(threadId: string | null, userId = readAuthSession()?.userId): string | null {
+  return userId ? `${STORAGE_PREFIX}:${userId}:${threadId ?? 'user'}` : null
 }
 
-function readStore(): PendingStore {
+function readStore(threadId: string | null): PendingStore {
   try {
-    const key = storageKey()
+    const key = storageKey(threadId)
     if (!key) return {}
     const raw = window.localStorage.getItem(key)
     if (!raw) return {}
@@ -27,9 +28,9 @@ function readStore(): PendingStore {
   }
 }
 
-function writeStore(store: PendingStore) {
+function writeStore(threadId: string | null, store: PendingStore) {
   try {
-    const key = storageKey()
+    const key = storageKey(threadId)
     if (!key) return
     window.localStorage.setItem(key, JSON.stringify(store))
   } catch {
@@ -42,29 +43,37 @@ function generateKey(operation: string) {
   return `xuanos-${operation}-${suffix}`
 }
 
-export function getOrCreateIdempotencyKey(operation: string, payload: unknown): string {
-  const store = readStore()
+export function getOrCreateIdempotencyKey(
+  operation: string,
+  payload: unknown,
+  threadId: string | null = null,
+): string {
+  const store = readStore(threadId)
   const fingerprint = JSON.stringify(payload)
   const pending = store[operation]
   if (pending?.fingerprint === fingerprint) return pending.key
 
   const key = generateKey(operation)
   store[operation] = { key, fingerprint, createdAt: new Date().toISOString() }
-  writeStore(store)
+  writeStore(threadId, store)
   return key
 }
 
-export function clearIdempotencyKey(operation: string, key: string) {
-  const store = readStore()
+export function clearIdempotencyKey(operation: string, key: string, threadId: string | null = null) {
+  const store = readStore(threadId)
   if (store[operation]?.key !== key) return
   delete store[operation]
-  writeStore(store)
+  writeStore(threadId, store)
 }
 
 export function clearIdempotencyStore(userId: string | null) {
   if (!userId) return
   try {
-    window.localStorage.removeItem(storageKey(userId)!)
+    const keys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))
+      .filter((key): key is string => Boolean(key))
+      .filter((key) => key.startsWith(`${STORAGE_PREFIX}:${userId}:`)
+        || key === `${LEGACY_STORAGE_PREFIX}:${userId}`)
+    keys.forEach((key) => window.localStorage.removeItem(key))
   } catch {
     // An invalid session is still removed even if browser storage is unavailable.
   }

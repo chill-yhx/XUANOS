@@ -62,6 +62,12 @@ export interface ApiErrorState {
   requestId: string | null
 }
 
+export interface RequestScope {
+  userId: string
+  threadId: string
+  generation: number
+}
+
 export interface PriorityGroup {
   title: string
   label: string
@@ -192,6 +198,7 @@ export interface PlanItem {
 
 export interface PlanVersion {
   id: string
+  threadId?: string
   rootPlanId?: string
   previousPlanId?: string | null
   understandingSessionId?: string
@@ -408,6 +415,7 @@ export interface ThreadAggregateState {
 
 export interface DemoSessionState {
   schemaVersion: 2
+  activeThreadGeneration: number
   currentStep: InteractionStep
   serverStep: InteractionStep
   isLoading: boolean
