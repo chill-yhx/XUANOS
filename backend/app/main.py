@@ -9,6 +9,7 @@ from app.api.router import api_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
+from app.engines.provider import get_decision_engines
 
 
 @asynccontextmanager
@@ -18,10 +19,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    get_decision_engines()
     application = FastAPI(
         title="XUANOS Backend",
         version="0.1.0",
-        description="XUANOS MVP persistent mock backend",
+        description="XUANOS MVP persistent decision backend",
         lifespan=lifespan,
     )
     application.add_middleware(

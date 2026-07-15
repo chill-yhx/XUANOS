@@ -7,17 +7,17 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
+from app.engines.provider import get_decision_engines
 from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
 from app.repositories.workflow import WorkflowRepository
 from app.rules.hypothesis_lifecycle import (
-    EXECUTION_AVOIDANCE_CATEGORY,
-    EXECUTION_AVOIDANCE_CONTENT,
+    GOAL_FEASIBILITY_CATEGORY,
+    goal_feasibility_content,
     hypothesis_semantic_key,
     is_active_hypothesis,
 )
-from app.rules.understanding_mock import QUESTION_MAP, QUESTIONS, generate_understanding
 from app.schemas.snapshot import SnapshotRead
 from app.schemas.understanding import (
     AnswerRead,
@@ -38,6 +38,9 @@ class UnderstandingService:
         self.session = session
         self.user_id = user_id
         self.workflow = WorkflowRepository(session)
+        self.engine = get_decision_engines().understanding
+        self.questions = self.engine.questions
+        self.question_map = {question.id: question for question in self.questions}
 
     def analyze(self, payload: UnderstandingAnalyzeRequest, idempotency_key: str) -> dict:
         manager = IdempotencyManager(
@@ -58,17 +61,18 @@ class UnderstandingService:
 
         answers = self.workflow.current_answers(understanding.id)
         answer_map = {answer.question_id: answer.answer_text for answer in answers}
-        missing_index = next((index for index, question in enumerate(QUESTIONS) if question.id not in answer_map), None)
+        questions = self.engine.questions_for(understanding.user_input, answer_map)
+        missing_index = next((index for index, question in enumerate(questions) if question.id not in answer_map), None)
         if missing_index is None:
-            summary = generate_understanding(understanding.user_input, answer_map)
-            understanding.real_goal = summary["real_goal"]
-            understanding.foundation = summary["foundation"]
-            understanding.constraints_summary = summary["constraints"]
-            understanding.tension = summary["tension"]
-            understanding.uncertain = summary["uncertain"]
+            summary = self.engine.analyze(understanding.user_input, answer_map)
+            understanding.real_goal = summary.real_goal
+            understanding.foundation = summary.foundation
+            understanding.constraints_summary = summary.constraints
+            understanding.tension = summary.tension
+            understanding.uncertain = summary.uncertain
             understanding.summary_version = max(1, understanding.summary_version + 1)
             understanding.status = "reviewing"
-            understanding.current_question_index = len(QUESTIONS) - 1
+            understanding.current_question_index = len(questions) - 1
             thread.current_step = "reviewing_understanding"
             thread.phase = "理解确认"
             next_question = None
@@ -77,7 +81,7 @@ class UnderstandingService:
             understanding.current_question_index = missing_index
             thread.current_step = "asking_question"
             thread.phase = "理解目标" if missing_index == 0 else "核对现实"
-            next_question = self._question(missing_index)
+            next_question = self._question(questions, missing_index)
 
         thread.last_activity_at = datetime.now(UTC)
         self.session.flush()
@@ -117,7 +121,7 @@ class UnderstandingService:
             thread.phase = "起点档案"
             goal = self._ensure_goal(understanding)
             self._ensure_constraint(understanding, goal)
-            hypothesis = self._ensure_hypothesis(thread.id)
+            hypothesis = self._ensure_hypothesis(understanding)
             hypotheses = [self._hypothesis_frontend(hypothesis)] if is_active_hypothesis(hypothesis) else []
             snapshot = SnapshotService(self.session, self.user_id).create_version(
                 source_thread_id=thread.id,
@@ -221,10 +225,21 @@ class UnderstandingService:
             )
 
     def _append_answer(self, understanding: UnderstandingSession, question_id: str, answer_text: str) -> None:
-        question = QUESTION_MAP[question_id]
+        question = self.question_map.get(question_id)
+        if question is None:
+            raise APIError(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "VALIDATION_ERROR",
+                "不支持的理解问题。",
+                {"question_id": question_id},
+            )
         current_answers = self.workflow.current_answers(understanding.id)
         current_map = {answer.question_id: answer for answer in current_answers}
-        expected = next((item.id for item in QUESTIONS if item.id not in current_map), None)
+        questions = self.engine.questions_for(
+            understanding.user_input,
+            {answer.question_id: answer.answer_text for answer in current_answers},
+        )
+        expected = next((item.id for item in questions if item.id not in current_map), None)
         previous = current_map.get(question_id)
         if previous is None and expected != question_id:
             raise APIError(
@@ -240,7 +255,7 @@ class UnderstandingService:
                 understanding_session_id=understanding.id,
                 question_id=question_id,
                 question_text=question.prompt,
-                question_order=QUESTIONS.index(question),
+                question_order=self.questions.index(question),
                 answer_text=answer_text.strip(),
                 revision=(previous.revision + 1) if previous else 1,
                 is_current=True,
@@ -261,14 +276,14 @@ class UnderstandingService:
         )
 
     @staticmethod
-    def _question(index: int) -> QuestionRead:
-        question = QUESTIONS[index]
+    def _question(questions, index: int) -> QuestionRead:
+        question = questions[index]
         return QuestionRead(
             id=question.id,
             prompt=question.prompt,
             hint=question.hint,
             index=index,
-            total=len(QUESTIONS),
+            total=len(questions),
         )
 
     @staticmethod
@@ -292,14 +307,17 @@ class UnderstandingService:
             original_expression=understanding.user_input or understanding.real_goal or "",
             title=(understanding.real_goal or "已确认目标")[:240],
             desired_outcome=understanding.real_goal or "",
-            success_criteria="结果可以被明确检查并完成一次真实验证。",
+            success_criteria=f"围绕“{understanding.real_goal or '当前目标'}”完成一次可记录的首轮行动并提交反馈。",
             goal_type="project",
             priority="primary",
             status="active",
-            current_stage="后端核心闭环",
+            current_stage="目标已确认",
             estimated_load="medium",
             feasibility="medium",
-            feasibility_basis="已有规格和前端 Mock 流程，当前需要后端持久化闭环。",
+            feasibility_basis=(
+                f"当前基础：{understanding.foundation or '尚待补充'}；"
+                f"现实限制：{understanding.constraints_summary or '尚待补充'}。"
+            ),
             user_confirmed=True,
         )
         self.session.add(goal)
@@ -327,19 +345,20 @@ class UnderstandingService:
             )
         )
 
-    def _ensure_hypothesis(self, thread_id: str) -> Hypothesis:
-        semantic_key = hypothesis_semantic_key(EXECUTION_AVOIDANCE_CATEGORY, EXECUTION_AVOIDANCE_CONTENT)
-        hypothesis = self.workflow.active_hypothesis(thread_id, EXECUTION_AVOIDANCE_CATEGORY)
+    def _ensure_hypothesis(self, understanding: UnderstandingSession) -> Hypothesis:
+        content = goal_feasibility_content(understanding.real_goal or "")
+        semantic_key = hypothesis_semantic_key(GOAL_FEASIBILITY_CATEGORY, content)
+        hypothesis = self.workflow.active_hypothesis(understanding.thread_id, GOAL_FEASIBILITY_CATEGORY)
         if hypothesis:
             return hypothesis
-        hypothesis = self.workflow.hypothesis_by_semantic_key(thread_id, semantic_key)
+        hypothesis = self.workflow.hypothesis_by_semantic_key(understanding.thread_id, semantic_key)
         if hypothesis:
             return hypothesis
         hypothesis = Hypothesis(
             user_id=self.user_id,
-            thread_id=thread_id,
-            content=EXECUTION_AVOIDANCE_CONTENT,
-            category=EXECUTION_AVOIDANCE_CATEGORY,
+            thread_id=understanding.thread_id,
+            content=content,
+            category=GOAL_FEASIBILITY_CATEGORY,
             semantic_key=semantic_key,
             status="pending",
             confidence_internal=0.5,

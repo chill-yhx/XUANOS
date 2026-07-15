@@ -378,7 +378,7 @@ def test_partial_hypothesis_creates_persisted_replacement_that_can_be_discontinu
             session.scalar(
                 select(func.count(Hypothesis.id)).where(
                     Hypothesis.thread_id == hypothesis_data["_thread_id"],
-                    Hypothesis.category == "execution_avoidance",
+                    Hypothesis.category == "goal_feasibility",
                 )
             )
             == 2

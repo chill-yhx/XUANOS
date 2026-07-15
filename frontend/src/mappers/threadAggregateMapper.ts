@@ -1,6 +1,13 @@
 import type { ThreadAggregateDto, ThreadDto } from '../api/dto'
-import { understandingQuestionAt } from '../data/understandingQuestions'
-import type { ActiveThread, InteractionStep, ThreadAggregateState } from '../types'
+import { understandingQuestions } from '../data/understandingQuestions'
+import type {
+  ActiveThread,
+  InteractionStep,
+  QuestionId,
+  ThreadAggregateState,
+  UnderstandingQuestion,
+  UnderstandingSession,
+} from '../types'
 import { actionResultMapper, systemRevisionMapper } from './actionResultMapper'
 import { planMapper } from './planMapper'
 import { snapshotMapper } from './snapshotMapper'
@@ -46,6 +53,21 @@ export function threadMapper(dto: ThreadDto): ActiveThread {
   }
 }
 
+function recoveredQuestion(
+  session: UnderstandingSession,
+  answers: Partial<Record<QuestionId, string>>,
+): UnderstandingQuestion | null {
+  const goalWasExpressed = Boolean(session.userInput?.trim()) || Boolean(answers.desired_result?.trim())
+  const required = understandingQuestions.filter((question) => question.id !== 'desired_result' || !goalWasExpressed)
+  const question = required.find((item) => !answers[item.id]?.trim())
+  if (!question) return null
+  return {
+    ...question,
+    index: required.findIndex((item) => item.id === question.id),
+    total: required.length,
+  }
+}
+
 export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateState {
   const thread = threadMapper(dto.thread)
   const snapshot = snapshotMapper(dto.current_snapshot)
@@ -67,7 +89,7 @@ export function threadAggregateMapper(dto: ThreadAggregateDto): ThreadAggregateS
       })
     : null
   const currentQuestion = activeUnderstandingSession?.status === 'collecting'
-    ? understandingQuestionAt(activeUnderstandingSession.currentQuestionIndex)
+    ? recoveredQuestion(activeUnderstandingSession, answers)
     : null
 
   return {

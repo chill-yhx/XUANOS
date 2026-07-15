@@ -28,7 +28,7 @@ def idempotency(value: str) -> dict[str, str]:
     return {"Idempotency-Key": value}
 
 
-def create_thread(client: TestClient, title: str = "后端核心闭环") -> str:
+def create_thread(client: TestClient, title: str = "核心流程验证") -> str:
     response = client.post(
         "/api/threads",
         headers=idempotency(f"create-thread-{uuid4().hex}"),
@@ -45,17 +45,16 @@ def analyze_understanding(client: TestClient, thread_id: str, key_prefix: str) -
         json={
             "thread_id": thread_id,
             "expression_mode": "speak",
-            "user_input": "我想完成 XUANOS 后端核心闭环。",
+            "user_input": "我想完成一个可验证的核心目标。",
         },
     )
     assert first.status_code == 200
     data = first.json()["data"]
-    assert data["next_question"]["id"] == "desired_result"
+    assert data["next_question"]["id"] == "current_foundation"
     session_id = data["session"]["id"]
 
     answers = [
-        ("desired_result", "让后端完整支持理解、计划、反馈和快照更新。"),
-        ("current_foundation", "已有前端 Mock 流程、后端基础工程和接口规格。"),
+        ("current_foundation", "已有可运行的前端、后端基础工程和接口规格。"),
         ("real_constraints", "本轮不接真实 AI、不改前端、不做登录支付。"),
     ]
     last = None
@@ -75,7 +74,7 @@ def analyze_understanding(client: TestClient, thread_id: str, key_prefix: str) -
     result = last.json()["data"]
     assert result["current_step"] == "reviewing_understanding"
     assert result["next_question"] is None
-    assert result["understanding"]["real_goal"].startswith("让后端完整支持")
+    assert result["understanding"]["real_goal"].startswith("我想完成一个可验证的核心目标")
     return FlowContext(thread_id=thread_id, understanding_session_id=session_id)
 
 

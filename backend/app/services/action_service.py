@@ -5,17 +5,19 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
+from app.engines.provider import get_decision_engines
+from app.engines.schemas import ActionFeedbackContext
 from app.models.action_result import ActionResult
+from app.models.goal import Goal
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import UserCorrection
 from app.repositories.workflow import WorkflowRepository
 from app.rules.hypothesis_lifecycle import (
-    EXECUTION_AVOIDANCE_CATEGORY,
-    EXECUTION_AVOIDANCE_CONTENT,
+    GOAL_FEASIBILITY_CATEGORY,
+    goal_feasibility_content,
     hypothesis_semantic_key,
     is_active_hypothesis,
 )
-from app.rules.revision_mock import analyze_feedback
 from app.rules.workflow_steps import (
     advance_workflow_step,
     later_workflow_step,
@@ -67,12 +69,18 @@ class ActionService:
                 {"current_step": thread.current_step},
             )
 
-        decision = analyze_feedback(
-            started=payload.started,
-            completed=payload.completed,
-            progress_percent=payload.progress_percent,
-            actual_duration_minutes=payload.actual_duration_minutes,
-            obstacle_code=payload.obstacle_code,
+        goal = self.session.get(Goal, plan.primary_goal_id)
+        goal_outcome = goal.desired_outcome if goal else plan.summary
+        decision = get_decision_engines().action.revise(
+            ActionFeedbackContext(
+                goal=goal_outcome,
+                action=plan.single_action,
+                started=payload.started,
+                completed=payload.completed,
+                progress_percent=payload.progress_percent,
+                actual_duration_minutes=payload.actual_duration_minutes,
+                obstacle_code=payload.obstacle_code,
+            )
         )
         action = ActionResult(
             user_id=self.user_id,
@@ -96,16 +104,17 @@ class ActionService:
         self.session.add(action)
         self.session.flush()
 
-        semantic_key = hypothesis_semantic_key(EXECUTION_AVOIDANCE_CATEGORY, EXECUTION_AVOIDANCE_CONTENT)
-        hypothesis = self.workflow.active_hypothesis(thread.id, EXECUTION_AVOIDANCE_CATEGORY)
+        hypothesis_content = goal_feasibility_content(goal_outcome)
+        semantic_key = hypothesis_semantic_key(GOAL_FEASIBILITY_CATEGORY, hypothesis_content)
+        hypothesis = self.workflow.active_hypothesis(thread.id, GOAL_FEASIBILITY_CATEGORY)
         if hypothesis is None:
             hypothesis = self.workflow.hypothesis_by_semantic_key(thread.id, semantic_key)
             if hypothesis is None:
                 hypothesis = Hypothesis(
                     user_id=self.user_id,
                     thread_id=thread.id,
-                    content=EXECUTION_AVOIDANCE_CONTENT,
-                    category=EXECUTION_AVOIDANCE_CATEGORY,
+                    content=hypothesis_content,
+                    category=GOAL_FEASIBILITY_CATEGORY,
                     semantic_key=semantic_key,
                     status="pending",
                     supporting_evidence=[],

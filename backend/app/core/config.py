@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     demo_reset_enabled: bool = False
     session_ttl_days: int = 30
+    decision_engine_provider: str = "deterministic"
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -15,9 +15,9 @@ class SnapshotService:
         self.snapshots = SnapshotRepository(session)
 
     def get_current(self) -> UserSnapshot:
-        snapshot = self.snapshots.get_current(self.user_id)
-        if snapshot is None:
-            _, snapshot = ensure_user_snapshot(self.session, self.user_id)
+        current = self.snapshots.get_current(self.user_id)
+        _, snapshot = ensure_user_snapshot(self.session, self.user_id)
+        if snapshot is not current:
             self.session.commit()
         return snapshot
 
@@ -36,9 +36,7 @@ class SnapshotService:
         user_correction: str | None = None,
         increment_revision: bool = False,
     ) -> UserSnapshot:
-        current = self.snapshots.get_current(self.user_id)
-        if current is None:
-            _, current = ensure_user_snapshot(self.session, self.user_id)
+        _, current = ensure_user_snapshot(self.session, self.user_id)
 
         revisions = deepcopy(current.recent_revisions)
         if recent_revision:

@@ -15,7 +15,7 @@ from app.models.snapshot import UserSnapshot
 from app.models.understanding import UnderstandingSession, UserCorrection
 from app.models.user import User
 from app.repositories.workflow import WorkflowRepository
-from app.rules.correction_mock import decide_correction
+from app.rules.correction_policy import decide_correction
 from app.rules.hypothesis_lifecycle import (
     REPLACEMENT_CORRECTION_TYPES,
     hypothesis_semantic_key,

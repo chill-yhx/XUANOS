@@ -5,8 +5,14 @@ from app.models.hypothesis import Hypothesis
 ACTIVE_HYPOTHESIS_STATUSES = frozenset({"pending", "verified"})
 TERMINAL_HYPOTHESIS_STATUSES = frozenset({"denied", "discontinued", "expired", "superseded"})
 REPLACEMENT_CORRECTION_TYPES = frozenset({"partial", "inaccurate", "changed"})
-EXECUTION_AVOIDANCE_CATEGORY = "execution_avoidance"
-EXECUTION_AVOIDANCE_CONTENT = "用户可能通过继续完善文档推迟真实开发"
+GOAL_FEASIBILITY_CATEGORY = "goal_feasibility"
+
+
+def goal_feasibility_content(goal: str) -> str:
+    """Create a stable, thread-specific hypothesis from a confirmed goal."""
+
+    normalized_goal = " ".join(goal.strip().split())[:240] or "当前目标"
+    return f"“{normalized_goal}”可以通过一次小范围行动验证可执行性。"
 
 
 def normalize_hypothesis_content(content: str) -> str:

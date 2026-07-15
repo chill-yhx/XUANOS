@@ -1,1 +1,1 @@
-"""Deterministic mock business rules will live here in later batches."""
+"""Workflow policies and lifecycle rules shared by persistence services."""

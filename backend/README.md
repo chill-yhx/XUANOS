@@ -21,9 +21,12 @@ python -m venv .venv
 
 Swagger: `http://127.0.0.1:8000/docs`
 
-## Core mock flow
+## Core decision flow
 
-The second backend batch owns the complete deterministic flow:
+The backend owns a complete deterministic, input-driven decision flow. The
+provider is selected with `XUANOS_DECISION_ENGINE_PROVIDER=deterministic`; a
+future model-backed provider can implement the same engine contracts without
+changing the API or persistence workflow:
 
 ```text
 POST /api/sessions

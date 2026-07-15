@@ -18,6 +18,8 @@ CORRECTION_LABELS = {
 
 
 def decide_correction(correction_type: str, target_type: str) -> CorrectionDecision:
+    """Apply the product's append-only correction policy."""
+
     label = CORRECTION_LABELS[correction_type]
     if correction_type == "accurate":
         return CorrectionDecision(
@@ -26,11 +28,11 @@ def decide_correction(correction_type: str, target_type: str) -> CorrectionDecis
             recent_revision=f"用户确认 {target_type} 当前准确。",
         )
     if correction_type == "discontinue":
-        handling = "已保留原始记录，并在新版快照中停止继续采用该内容。"
+        handling = "已保留原始记录，并在新版本快照中停止继续采用该内容。"
     elif correction_type == "changed":
-        handling = "已保留原始记录，并将变化后的内容写入新版快照。"
+        handling = "已保留原始记录，并将变化后的内容写入新版本快照。"
     else:
-        handling = "已保留原始记录，并将用户修正写入新版快照。"
+        handling = "已保留原始记录，并将用户修正写入新版本快照。"
     return CorrectionDecision(
         snapshot_required=True,
         system_handling=handling,

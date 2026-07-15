@@ -6,11 +6,11 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
+from app.engines.provider import get_decision_engines
 from app.models.goal import Goal
 from app.models.plan import Plan, PlanItem
 from app.models.understanding import UserCorrection
 from app.repositories.workflow import WorkflowRepository
-from app.rules.plan_mock import generate_plan, modification_impact
 from app.rules.workflow_steps import (
     advance_workflow_step,
     is_known_workflow_step,
@@ -57,7 +57,11 @@ class PlanService:
         if goal is None:
             raise APIError(status.HTTP_409_CONFLICT, "INVALID_FLOW_STATE", "已确认理解缺少主目标。")
 
-        decision = generate_plan(understanding.real_goal or goal.desired_outcome)
+        decision = get_decision_engines().plan.create_plan(
+            real_goal=understanding.real_goal or goal.desired_outcome,
+            foundation=understanding.foundation or "",
+            constraints=understanding.constraints_summary or "",
+        )
         plan_id = new_id()
         plan = Plan(
             id=plan_id,
@@ -81,7 +85,23 @@ class PlanService:
         self.session.add(plan)
         self.session.flush()
         for item in decision.items:
-            self.session.add(PlanItem(plan_id=plan.id, goal_id=goal.id, **item))
+            self.session.add(
+                PlanItem(
+                    plan_id=plan.id,
+                    goal_id=goal.id,
+                    item_type=item.item_type,
+                    title=item.title,
+                    time_block=item.time_block,
+                    estimated_minutes=item.estimated_minutes,
+                    difficulty=item.difficulty,
+                    completion_standard=item.completion_standard,
+                    is_optional=item.is_optional,
+                    source=item.source,
+                    is_user_modified=item.is_user_modified,
+                    modification_note=item.modification_note,
+                    sort_order=item.sort_order,
+                )
+            )
         thread.active_plan_id = plan.id
         thread.current_step = advance_workflow_step(thread.current_step, "plan_generated")
         thread.phase = "计划裁决"
@@ -123,7 +143,13 @@ class PlanService:
         if not payload.expected_impact_acknowledged:
             raise APIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "VALIDATION_ERROR", "必须确认预计影响。")
 
-        impact, warning = modification_impact(payload.reason)
+        modification = get_decision_engines().plan.assess_modification(
+            reason=payload.reason,
+            original_action=previous.single_action,
+            user_final_choice=payload.user_final_choice.strip(),
+        )
+        impact = modification.expected_impact
+        warning = modification.warning_level
         current = Plan(
             id=new_id(),
             root_plan_id=previous.root_plan_id,
