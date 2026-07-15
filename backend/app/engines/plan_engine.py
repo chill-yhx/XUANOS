@@ -1,11 +1,12 @@
 import re
 from typing import Protocol
 
+from app.engines.context import DecisionContext
 from app.engines.schemas import PlanDecision, PlanItemDecision, PlanModificationDecision
 
 
 class PlanEngine(Protocol):
-    def create_plan(self, *, real_goal: str, foundation: str, constraints: str) -> PlanDecision: ...
+    def create_plan(self, context: DecisionContext) -> PlanDecision: ...
 
     def assess_modification(
         self,
@@ -19,10 +20,10 @@ class PlanEngine(Protocol):
 class DeterministicPlanEngine:
     """Create a context-bound first action from goal structure and constraints."""
 
-    def create_plan(self, *, real_goal: str, foundation: str, constraints: str) -> PlanDecision:
-        goal = self._clean(real_goal, "当前目标")
-        base = self._clean(foundation, "现有基础待确认")
-        limits = self._clean(constraints, "现实限制待确认")
+    def create_plan(self, context: DecisionContext) -> PlanDecision:
+        goal = self._clean(context.primary_goal(), "当前目标")
+        base = self._clean(context.foundation(), "现有基础待确认")
+        limits = self._clean(context.constraints_text(), "现实限制待确认")
         minutes = self._timebox_minutes(limits)
         schedule = self._schedule_phrase(limits)
         stage, action, completion_standard, workload, action_minutes = self._first_action(

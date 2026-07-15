@@ -1,10 +1,11 @@
 from typing import Protocol
 
-from app.engines.schemas import ActionFeedbackContext, ActionRevisionDecision
+from app.engines.context import DecisionContext
+from app.engines.schemas import ActionRevisionDecision
 
 
 class ActionEngine(Protocol):
-    def revise(self, context: ActionFeedbackContext) -> ActionRevisionDecision: ...
+    def revise(self, context: DecisionContext) -> ActionRevisionDecision: ...
 
 
 class DeterministicActionEngine:
@@ -23,34 +24,40 @@ class DeterministicActionEngine:
         "other": "其他阻力",
     }
 
-    def revise(self, context: ActionFeedbackContext) -> ActionRevisionDecision:
-        obstacle = self._obstacle_labels.get(context.obstacle_code, context.obstacle_code)
-        duration = (
-            f"{context.actual_duration_minutes} 分钟" if context.actual_duration_minutes is not None else "未记录"
-        )
-        if not context.started:
+    def revise(self, context: DecisionContext) -> ActionRevisionDecision:
+        feedback = context.action_feedback or {}
+        goal = str(feedback.get("goal") or context.primary_goal())
+        action = str(feedback.get("action") or "当前行动")
+        obstacle_code = str(feedback.get("obstacle_code") or "other")
+        obstacle = self._obstacle_labels.get(obstacle_code, obstacle_code)
+        started = bool(feedback.get("started"))
+        completed = bool(feedback.get("completed"))
+        progress_percent = int(feedback.get("progress_percent") or 0)
+        actual_duration_minutes = feedback.get("actual_duration_minutes")
+        duration = f"{actual_duration_minutes} 分钟" if actual_duration_minutes is not None else "未记录"
+        if not started:
             return ActionRevisionDecision(
                 actual_result=f"本次没有开始，记录的主要阻力是{obstacle}。",
-                revised_judgment=f"“{context.action}”当前的启动门槛仍然偏高，需要先缩小到可开始的版本。",
-                next_adjustment=f"将“{context.action}”缩小为 15 分钟启动版本，只完成第一步。",
+                revised_judgment=f"“{action}”当前的启动门槛仍然偏高，需要先缩小到可开始的版本。",
+                next_adjustment=f"将“{action}”缩小为 15 分钟启动版本，只完成第一步。",
                 next_stage="行动启动",
-                pattern=f"当“{context.goal}”的启动动作更小、更明确时，更容易开始。",
+                pattern=f"当“{goal}”的启动动作更小、更明确时，更容易开始。",
                 hypothesis_status="pending",
             )
-        if context.completed:
+        if completed:
             return ActionRevisionDecision(
                 actual_result=f"本次已完成，实际用时 {duration}，记录的主要阻力是{obstacle}。",
-                revised_judgment=f"“{context.action}”在当前现实边界内可以完成，可以进入下一轮小范围验证。",
-                next_adjustment=f"为“{context.goal}”确定下一次最小行动，并安排一个具体时间段。",
+                revised_judgment=f"“{action}”在当前现实边界内可以完成，可以进入下一轮小范围验证。",
+                next_adjustment=f"为“{goal}”确定下一次最小行动，并安排一个具体时间段。",
                 next_stage="行动复查",
-                pattern=f"围绕“{context.goal}”的行动在范围明确时可以形成完成反馈。",
+                pattern=f"围绕“{goal}”的行动在范围明确时可以形成完成反馈。",
                 hypothesis_status="verified",
             )
         return ActionRevisionDecision(
-            actual_result=(f"本次完成 {context.progress_percent}% ，实际用时 {duration}，记录的主要阻力是{obstacle}。"),
-            revised_judgment=f"“{context.action}”可以推进，但仍需根据已暴露的阻力继续收束范围。",
-            next_adjustment=f"将“{context.action}”拆成一个 15 分钟版本，先完成剩余部分的第一段。",
+            actual_result=(f"本次完成 {progress_percent}% ，实际用时 {duration}，记录的主要阻力是{obstacle}。"),
+            revised_judgment=f"“{action}”可以推进，但仍需根据已暴露的阻力继续收束范围。",
+            next_adjustment=f"将“{action}”拆成一个 15 分钟版本，先完成剩余部分的第一段。",
             next_stage="行动收束",
-            pattern=f"将“{context.goal}”拆成更小步骤后，推进阻力更容易被识别。",
+            pattern=f"将“{goal}”拆成更小步骤后，推进阻力更容易被识别。",
             hypothesis_status="pending",
         )

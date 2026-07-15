@@ -24,9 +24,23 @@ Swagger: `http://127.0.0.1:8000/docs`
 ## Core decision flow
 
 The backend owns a complete deterministic, input-driven decision flow. The
-provider is selected with `XUANOS_DECISION_ENGINE_PROVIDER=deterministic`; a
-future model-backed provider can implement the same engine contracts without
-changing the API or persistence workflow:
+formal baseline always remains deterministic. An optional OpenAI-compatible
+LLM can run only in shadow mode, producing a separately stored candidate and
+evaluation record; it never changes a workflow response, plan, snapshot, or
+hypothesis.
+
+```text
+XUANOS_DECISION_ENGINE_PROVIDER=deterministic   # baseline only
+XUANOS_LLM_SHADOW_ENABLED=false                 # no provider call by default
+```
+
+To enable a real shadow transport, set
+`XUANOS_DECISION_ENGINE_PROVIDER=openai_compatible` plus
+`XUANOS_LLM_MODEL`, `XUANOS_LLM_API_KEY`, `XUANOS_LLM_BASE_URL`, and an
+optional `XUANOS_LLM_TIMEOUT_SECONDS`. Keep the key in local environment
+configuration only; never commit it.
+
+The formal workflow remains:
 
 ```text
 POST /api/sessions

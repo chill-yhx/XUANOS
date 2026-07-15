@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Protocol
 
+from app.engines.context import DecisionContext
 from app.engines.schemas import DecisionQuestion, UnderstandingDecision
 
 
@@ -8,13 +9,9 @@ class UnderstandingEngine(Protocol):
     @property
     def questions(self) -> tuple[DecisionQuestion, ...]: ...
 
-    def questions_for(
-        self,
-        user_input: str | None,
-        answers: Mapping[str, str],
-    ) -> tuple[DecisionQuestion, ...]: ...
+    def questions_for(self, context: DecisionContext) -> tuple[DecisionQuestion, ...]: ...
 
-    def analyze(self, user_input: str | None, answers: Mapping[str, str]) -> UnderstandingDecision: ...
+    def decide(self, context: DecisionContext) -> UnderstandingDecision: ...
 
 
 class DeterministicUnderstandingEngine:
@@ -42,20 +39,18 @@ class DeterministicUnderstandingEngine:
     def questions(self) -> tuple[DecisionQuestion, ...]:
         return self._questions
 
-    def questions_for(
-        self,
-        user_input: str | None,
-        answers: Mapping[str, str],
-    ) -> tuple[DecisionQuestion, ...]:
+    def questions_for(self, context: DecisionContext) -> tuple[DecisionQuestion, ...]:
         """Ask only for facts not already supplied in the expression."""
 
+        answers = context.answer_map()
         known = {question_id for question_id, answer in answers.items() if answer and answer.strip()}
-        if user_input and user_input.strip():
+        if context.original_expression and context.original_expression.strip():
             known.add("desired_result")
         return tuple(question for question in self._questions if question.id not in known)
 
-    def analyze(self, user_input: str | None, answers: Mapping[str, str]) -> UnderstandingDecision:
-        real_goal = self._value(answers, "desired_result", user_input, "尚未明确的具体结果")
+    def decide(self, context: DecisionContext) -> UnderstandingDecision:
+        answers = context.answer_map()
+        real_goal = self._value(answers, "desired_result", context.original_expression, "尚未明确的具体结果")
         foundation = self._value(answers, "current_foundation", None, "当前基础尚待补充")
         constraints = self._value(answers, "real_constraints", None, "现实限制尚待补充")
         return UnderstandingDecision(

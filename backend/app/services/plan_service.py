@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
+from app.engines.context import DecisionContextBuilder
 from app.engines.provider import get_decision_engines
+from app.engines.schemas import ShadowEvaluationIntent, baseline_output_for
 from app.models.goal import Goal
 from app.models.plan import Plan, PlanItem
 from app.models.understanding import UserCorrection
@@ -35,8 +37,11 @@ class PlanService:
         self.session = session
         self.user_id = user_id
         self.workflow = WorkflowRepository(session)
+        self.contexts = DecisionContextBuilder(session, user_id)
+        self.shadow_intent: ShadowEvaluationIntent | None = None
 
     def create(self, payload: PlanCreateRequest, idempotency_key: str) -> dict:
+        self.shadow_intent = None
         manager = IdempotencyManager(
             self.session, self.user_id, "POST /api/plans", idempotency_key, payload.model_dump(mode="json")
         )
@@ -57,11 +62,12 @@ class PlanService:
         if goal is None:
             raise APIError(status.HTTP_409_CONFLICT, "INVALID_FLOW_STATE", "已确认理解缺少主目标。")
 
-        decision = get_decision_engines().plan.create_plan(
-            real_goal=understanding.real_goal or goal.desired_outcome,
-            foundation=understanding.foundation or "",
-            constraints=understanding.constraints_summary or "",
+        context = self.contexts.build(
+            decision_type="plan",
+            thread_id=thread.id,
+            understanding=understanding,
         )
+        decision = get_decision_engines().plan.create_plan(context)
         plan_id = new_id()
         plan = Plan(
             id=plan_id,
@@ -117,6 +123,13 @@ class PlanService:
         data = result.model_dump(mode="json")
         manager.store("plan", plan.id, data)
         self.session.commit()
+        self.shadow_intent = ShadowEvaluationIntent(
+            decision_type="plan",
+            user_id=self.user_id,
+            thread_id=thread.id,
+            context=context,
+            baseline_output=baseline_output_for("plan", decision, context),
+        )
         return data
 
     def revise(self, plan_id: str, payload: PlanReviseRequest, idempotency_key: str) -> dict:

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     demo_reset_enabled: bool = False
     session_ttl_days: int = 30
     decision_engine_provider: str = "deterministic"
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_base_url: str | None = None
+    llm_timeout_seconds: float = Field(default=8.0, gt=0, le=120)
+    llm_shadow_enabled: bool = False
 
     @field_validator("cors_origins", mode="before")
     @classmethod

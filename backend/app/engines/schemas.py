@@ -1,4 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING, Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from app.engines.context import DecisionContext
+
+
+DecisionType = Literal["understanding", "plan", "action_revision"]
 
 
 @dataclass(frozen=True)
@@ -69,3 +78,89 @@ class ActionRevisionDecision:
     next_stage: str
     pattern: str
     hypothesis_status: str
+
+
+@dataclass(frozen=True)
+class ShadowEvaluationIntent:
+    decision_type: DecisionType
+    user_id: str
+    thread_id: str
+    context: "DecisionContext"
+    baseline_output: dict[str, Any]
+
+
+CandidateText = Annotated[str, Field(min_length=1, max_length=1600)]
+CandidateShortText = Annotated[str, Field(min_length=1, max_length=320)]
+
+
+class CandidateDecisionBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    unknown_information: list[CandidateShortText] = Field(default_factory=list, max_length=10)
+
+
+class UnderstandingCandidate(CandidateDecisionBase):
+    real_goal: CandidateText
+    foundation: CandidateText
+    constraints: CandidateText
+    tension: CandidateText
+    uncertain: CandidateText
+
+
+class PlanItemCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    item_type: Literal["action", "maintenance", "paused", "deleted"]
+    title: CandidateText
+    sort_order: int = Field(ge=1, le=10)
+    estimated_minutes: int | None = Field(default=None, ge=1, le=1440)
+    completion_standard: CandidateText | None = None
+
+
+class PlanCandidate(CandidateDecisionBase):
+    stage: CandidateShortText
+    summary: CandidateText
+    single_action: CandidateText
+    completion_standard: CandidateText
+    review_condition: CandidateText
+    workload: Literal["low", "medium", "high"]
+    system_recommendation: CandidateText
+    items: list[PlanItemCandidate] = Field(min_length=1, max_length=5)
+    maintenance_goals: list[CandidateShortText] = Field(default_factory=list, max_length=5)
+    paused_goals: list[CandidateShortText] = Field(default_factory=list, max_length=5)
+    deleted_items: list[CandidateShortText] = Field(default_factory=list, max_length=5)
+
+
+class ActionRevisionCandidate(CandidateDecisionBase):
+    actual_result: CandidateText
+    revised_judgment: CandidateText
+    next_adjustment: CandidateText
+    next_stage: CandidateShortText
+    pattern: CandidateText
+    hypothesis_status: Literal["pending", "verified", "denied"]
+
+
+def candidate_schema_for(decision_type: DecisionType) -> type[CandidateDecisionBase]:
+    return {
+        "understanding": UnderstandingCandidate,
+        "plan": PlanCandidate,
+        "action_revision": ActionRevisionCandidate,
+    }[decision_type]
+
+
+def baseline_output_for(
+    decision_type: DecisionType,
+    decision: UnderstandingDecision | PlanDecision | ActionRevisionDecision,
+    context: "DecisionContext",
+) -> dict[str, Any]:
+    output = asdict(decision)
+    output["unknown_information"] = list(context.unknown_information)
+    if decision_type == "plan":
+        output.update(
+            {
+                "maintenance_goals": [],
+                "paused_goals": [],
+                "deleted_items": [],
+            }
+        )
+    return output

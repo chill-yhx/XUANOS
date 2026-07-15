@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
+from app.engines.context import DecisionContextBuilder
 from app.engines.provider import get_decision_engines
-from app.engines.schemas import ActionFeedbackContext
+from app.engines.schemas import ShadowEvaluationIntent, baseline_output_for
 from app.models.action_result import ActionResult
 from app.models.goal import Goal
 from app.models.hypothesis import Hypothesis
@@ -39,8 +40,11 @@ class ActionService:
         self.session = session
         self.user_id = user_id
         self.workflow = WorkflowRepository(session)
+        self.contexts = DecisionContextBuilder(session, user_id)
+        self.shadow_intent: ShadowEvaluationIntent | None = None
 
     def submit(self, payload: ActionResultCreate, idempotency_key: str) -> dict:
+        self.shadow_intent = None
         manager = IdempotencyManager(
             self.session,
             self.user_id,
@@ -71,17 +75,22 @@ class ActionService:
 
         goal = self.session.get(Goal, plan.primary_goal_id)
         goal_outcome = goal.desired_outcome if goal else plan.summary
-        decision = get_decision_engines().action.revise(
-            ActionFeedbackContext(
-                goal=goal_outcome,
-                action=plan.single_action,
-                started=payload.started,
-                completed=payload.completed,
-                progress_percent=payload.progress_percent,
-                actual_duration_minutes=payload.actual_duration_minutes,
-                obstacle_code=payload.obstacle_code,
-            )
+        context = self.contexts.build(
+            decision_type="action_revision",
+            thread_id=thread.id,
+            action_feedback={
+                "plan_id": plan.id,
+                "goal": goal_outcome,
+                "action": plan.single_action,
+                "started": payload.started,
+                "completed": payload.completed,
+                "progress_percent": payload.progress_percent,
+                "actual_duration_minutes": payload.actual_duration_minutes,
+                "obstacle_code": payload.obstacle_code,
+                "user_note": payload.obstacle_detail,
+            },
         )
+        decision = get_decision_engines().action.revise(context)
         action = ActionResult(
             user_id=self.user_id,
             thread_id=thread.id,
@@ -193,6 +202,13 @@ class ActionService:
         except Exception:
             self.session.rollback()
             raise
+        self.shadow_intent = ShadowEvaluationIntent(
+            decision_type="action_revision",
+            user_id=self.user_id,
+            thread_id=thread.id,
+            context=context,
+            baseline_output=baseline_output_for("action_revision", decision, context),
+        )
         return data
 
     @staticmethod

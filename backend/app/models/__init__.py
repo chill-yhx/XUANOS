@@ -4,6 +4,7 @@ from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.idempotency import IdempotencyRecord
 from app.models.plan import Plan, PlanItem
+from app.models.shadow_evaluation import ShadowEvaluation
 from app.models.snapshot import UserSnapshot
 from app.models.thread import Thread
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
@@ -19,6 +20,7 @@ __all__ = [
     "IdempotencyRecord",
     "Plan",
     "PlanItem",
+    "ShadowEvaluation",
     "Thread",
     "UnderstandingSession",
     "User",

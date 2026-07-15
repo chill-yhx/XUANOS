@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from app.core.errors import APIError
 from app.core.idempotency import IdempotencyManager
 from app.db.base import new_id
+from app.engines.context import DecisionContextBuilder
 from app.engines.provider import get_decision_engines
+from app.engines.schemas import ShadowEvaluationIntent, baseline_output_for
 from app.models.goal import Constraint, Goal
 from app.models.hypothesis import Hypothesis
 from app.models.understanding import Answer, UnderstandingSession, UserCorrection
@@ -39,10 +41,13 @@ class UnderstandingService:
         self.user_id = user_id
         self.workflow = WorkflowRepository(session)
         self.engine = get_decision_engines().understanding
+        self.contexts = DecisionContextBuilder(session, user_id)
+        self.shadow_intent: ShadowEvaluationIntent | None = None
         self.questions = self.engine.questions
         self.question_map = {question.id: question for question in self.questions}
 
     def analyze(self, payload: UnderstandingAnalyzeRequest, idempotency_key: str) -> dict:
+        self.shadow_intent = None
         manager = IdempotencyManager(
             self.session,
             self.user_id,
@@ -59,12 +64,17 @@ class UnderstandingService:
         if payload.answer:
             self._append_answer(understanding, payload.answer.question_id, payload.answer.answer_text)
 
-        answers = self.workflow.current_answers(understanding.id)
-        answer_map = {answer.question_id: answer.answer_text for answer in answers}
-        questions = self.engine.questions_for(understanding.user_input, answer_map)
+        context = self.contexts.build(
+            decision_type="understanding",
+            thread_id=thread.id,
+            understanding=understanding,
+        )
+        answer_map = context.answer_map()
+        questions = self.engine.questions_for(context)
         missing_index = next((index for index, question in enumerate(questions) if question.id not in answer_map), None)
+        summary = None
         if missing_index is None:
-            summary = self.engine.analyze(understanding.user_input, answer_map)
+            summary = self.engine.decide(context)
             understanding.real_goal = summary.real_goal
             understanding.foundation = summary.foundation
             understanding.constraints_summary = summary.constraints
@@ -89,6 +99,14 @@ class UnderstandingService:
         data = result.model_dump(mode="json")
         manager.store("understanding_session", understanding.id, data)
         self.session.commit()
+        if summary is not None:
+            self.shadow_intent = ShadowEvaluationIntent(
+                decision_type="understanding",
+                user_id=self.user_id,
+                thread_id=thread.id,
+                context=context,
+                baseline_output=baseline_output_for("understanding", summary, context),
+            )
         return data
 
     def confirm(self, session_id: str, payload: UnderstandingConfirmRequest, idempotency_key: str) -> dict:
@@ -235,10 +253,12 @@ class UnderstandingService:
             )
         current_answers = self.workflow.current_answers(understanding.id)
         current_map = {answer.question_id: answer for answer in current_answers}
-        questions = self.engine.questions_for(
-            understanding.user_input,
-            {answer.question_id: answer.answer_text for answer in current_answers},
+        context = self.contexts.build(
+            decision_type="understanding",
+            thread_id=understanding.thread_id,
+            understanding=understanding,
         )
+        questions = self.engine.questions_for(context)
         expected = next((item.id for item in questions if item.id not in current_map), None)
         previous = current_map.get(question_id)
         if previous is None and expected != question_id:
