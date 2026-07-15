@@ -66,6 +66,16 @@ class ShadowEvaluationService:
                 latency_ms=_latency_ms(started_at),
                 error_code=error.code,
             )
+        except Exception:
+            return self._store_failure(
+                intent=intent,
+                prompt=prompt,
+                context_hash=context_hash,
+                provider=configured_provider,
+                model=settings.llm_model,
+                latency_ms=_latency_ms(started_at),
+                error_code="EVALUATION_FAILED",
+            )
 
         try:
             raw_candidate = provider.generate(prompt)
@@ -79,12 +89,33 @@ class ShadowEvaluationService:
                 latency_ms=_latency_ms(started_at),
                 error_code=error.code,
             )
+        except Exception:
+            return self._store_failure(
+                intent=intent,
+                prompt=prompt,
+                context_hash=context_hash,
+                provider=provider.provider_name,
+                model=provider.model_name,
+                latency_ms=_latency_ms(started_at),
+                error_code="EVALUATION_FAILED",
+            )
 
         latency_ms = _latency_ms(started_at)
         try:
             candidate_payload = json.loads(raw_candidate)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return self._store_failure(
+                intent=intent,
+                prompt=prompt,
+                context_hash=context_hash,
+                provider=provider.provider_name,
+                model=provider.model_name,
+                latency_ms=latency_ms,
+                error_code="CANDIDATE_INVALID_JSON",
+            )
+        try:
             candidate = candidate_schema_for(intent.decision_type).model_validate(candidate_payload)
-        except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+        except ValidationError:
             return self._store_failure(
                 intent=intent,
                 prompt=prompt,
@@ -96,12 +127,23 @@ class ShadowEvaluationService:
             )
 
         candidate_output = candidate.model_dump(mode="json")
-        metrics = evaluate_candidate(
-            decision_type=intent.decision_type,
-            context=intent.context,
-            baseline_output=intent.baseline_output,
-            candidate_output=candidate_output,
-        )
+        try:
+            metrics = evaluate_candidate(
+                decision_type=intent.decision_type,
+                context=intent.context,
+                baseline_output=intent.baseline_output,
+                candidate_output=candidate_output,
+            )
+        except Exception:
+            return self._store_failure(
+                intent=intent,
+                prompt=prompt,
+                context_hash=context_hash,
+                provider=provider.provider_name,
+                model=provider.model_name,
+                latency_ms=latency_ms,
+                error_code="EVALUATION_FAILED",
+            )
         evaluation = ShadowEvaluation(
             user_id=intent.user_id,
             thread_id=intent.thread_id,

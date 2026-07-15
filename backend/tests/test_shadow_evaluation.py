@@ -258,6 +258,9 @@ def test_shadow_records_candidates_without_mutating_formal_workflow(
     assert all(
         "mentor_preferences_not_collected" in prompt["context"]["unknown_information"] for prompt in provider.prompts
     )
+    assert all(prompt["required_output_schema"] for prompt in provider.prompts)
+    assert all(prompt["required_output_example"] for prompt in provider.prompts)
+    assert all("JSON" in prompt["json_output_instruction"] for prompt in provider.prompts)
 
     with SessionLocal() as session:
         assert session.scalar(select(func.count(Plan.id))) == 1
@@ -276,7 +279,7 @@ def test_shadow_records_candidates_without_mutating_formal_workflow(
 @pytest.mark.parametrize(
     ("provider", "expected_error"),
     [
-        (ContextEchoProvider(lambda _version, _payload: "not-json"), "CANDIDATE_SCHEMA_INVALID"),
+        (ContextEchoProvider(lambda _version, _payload: "not-json"), "CANDIDATE_INVALID_JSON"),
         (
             ContextEchoProvider(lambda _version, _payload: json.dumps({"unexpected": "field"})),
             "CANDIDATE_SCHEMA_INVALID",
@@ -467,5 +470,38 @@ def test_candidate_schema_forbids_unknown_fields() -> None:
                 "uncertain": "实际阻力仍待验证。",
                 "unknown_information": [],
                 "unapproved_field": "must be rejected",
+            }
+        )
+
+
+def test_candidate_schema_requires_explicit_unknown_and_plan_classification_fields() -> None:
+    with pytest.raises(ValidationError):
+        candidate_schema_for("understanding").model_validate(
+            {
+                "real_goal": "在三个月内完成一个可验证目标。",
+                "foundation": "已有基础信息。",
+                "constraints": "每天可以投入 30 分钟。",
+                "tension": "需要在时间边界内推进。",
+                "uncertain": "实际阻力仍待验证。",
+            }
+        )
+    with pytest.raises(ValidationError):
+        candidate_schema_for("plan").model_validate(
+            {
+                "stage": "首轮验证",
+                "summary": "围绕目标安排首轮行动。",
+                "single_action": "完成第一个可检查单元。",
+                "completion_standard": "留下一个可检查结果。",
+                "review_condition": "完成后复查。",
+                "workload": "low",
+                "system_recommendation": "先验证最小行动。",
+                "items": [
+                    {
+                        "item_type": "action",
+                        "title": "完成第一个可检查单元。",
+                        "sort_order": 1,
+                    }
+                ],
+                "unknown_information": [],
             }
         )

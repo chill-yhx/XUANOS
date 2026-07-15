@@ -6,6 +6,9 @@ import httpx
 from app.core.config import get_settings
 from app.engines.action_engine import ActionEngine, DeterministicActionEngine
 from app.engines.errors import (
+    ShadowProviderAuthenticationError,
+    ShadowProviderPaymentRequiredError,
+    ShadowProviderRateLimitError,
     ShadowProviderResponseError,
     ShadowProviderTimeoutError,
     ShadowProviderTransportError,
@@ -62,6 +65,12 @@ class OpenAICompatibleShadowProvider:
         except httpx.HTTPError as error:
             raise ShadowProviderTransportError("Shadow provider transport failed") from error
 
+        if response.status_code in {401, 403}:
+            raise ShadowProviderAuthenticationError("Shadow provider rejected authentication")
+        if response.status_code == 402:
+            raise ShadowProviderPaymentRequiredError("Shadow provider requires account credit")
+        if response.status_code == 429:
+            raise ShadowProviderRateLimitError("Shadow provider rate limit reached")
         if response.status_code >= 400:
             raise ShadowProviderTransportError("Shadow provider returned an HTTP error")
         try:
@@ -69,13 +78,13 @@ class OpenAICompatibleShadowProvider:
             content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise ShadowProviderResponseError("Shadow provider returned an unsupported response") from error
-        if isinstance(content, str):
+        if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
             text = "".join(
                 str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"
             )
-            if text:
+            if text.strip():
                 return text
         raise ShadowProviderResponseError("Shadow provider response did not contain JSON text")
 

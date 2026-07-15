@@ -96,7 +96,7 @@ CandidateShortText = Annotated[str, Field(min_length=1, max_length=320)]
 class CandidateDecisionBase(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    unknown_information: list[CandidateShortText] = Field(default_factory=list, max_length=10)
+    unknown_information: list[CandidateShortText] = Field(max_length=10)
 
 
 class UnderstandingCandidate(CandidateDecisionBase):
@@ -126,9 +126,9 @@ class PlanCandidate(CandidateDecisionBase):
     workload: Literal["low", "medium", "high"]
     system_recommendation: CandidateText
     items: list[PlanItemCandidate] = Field(min_length=1, max_length=5)
-    maintenance_goals: list[CandidateShortText] = Field(default_factory=list, max_length=5)
-    paused_goals: list[CandidateShortText] = Field(default_factory=list, max_length=5)
-    deleted_items: list[CandidateShortText] = Field(default_factory=list, max_length=5)
+    maintenance_goals: list[CandidateShortText] = Field(max_length=5)
+    paused_goals: list[CandidateShortText] = Field(max_length=5)
+    deleted_items: list[CandidateShortText] = Field(max_length=5)
 
 
 class ActionRevisionCandidate(CandidateDecisionBase):

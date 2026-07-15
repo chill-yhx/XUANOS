@@ -4,6 +4,14 @@ from app.prompts.common import build_structured_prompt
 from app.prompts.types import PromptSpec
 
 PROMPT_VERSION = "understanding_v1"
+OUTPUT_EXAMPLE = {
+    "real_goal": "<context-grounded goal>",
+    "foundation": "<context-grounded foundation or explicit unknown>",
+    "constraints": "<context-grounded constraints or explicit unknown>",
+    "tension": "<conflict grounded in the supplied context>",
+    "uncertain": "<remaining uncertainty>",
+    "unknown_information": [],
+}
 
 
 def build_prompt(context: DecisionContext) -> PromptSpec:
@@ -12,4 +20,5 @@ def build_prompt(context: DecisionContext) -> PromptSpec:
         task="Produce a candidate UnderstandingDecision from the supplied user context.",
         context=context,
         output_schema=UnderstandingCandidate,
+        output_example=OUTPUT_EXAMPLE,
     )

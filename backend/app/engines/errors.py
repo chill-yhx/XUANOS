@@ -26,3 +26,15 @@ class ShadowProviderResponseError(ShadowProviderError):
 
 class ShadowProviderTransportError(ShadowProviderError):
     code = "PROVIDER_TRANSPORT_ERROR"
+
+
+class ShadowProviderAuthenticationError(ShadowProviderError):
+    code = "PROVIDER_AUTH_ERROR"
+
+
+class ShadowProviderPaymentRequiredError(ShadowProviderError):
+    code = "PROVIDER_PAYMENT_REQUIRED"
+
+
+class ShadowProviderRateLimitError(ShadowProviderError):
+    code = "PROVIDER_RATE_LIMITED"

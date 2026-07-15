@@ -1,11 +1,14 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="XUANOS_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=BACKEND_ROOT / ".env", env_prefix="XUANOS_", extra="ignore")
 
     app_env: str = "development"
     database_url: str = "sqlite:///./data/xuanos_dev.db"
@@ -17,7 +20,7 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
     llm_base_url: str | None = None
-    llm_timeout_seconds: float = Field(default=8.0, gt=0, le=120)
+    llm_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     llm_shadow_enabled: bool = False
 
     @field_validator("cors_origins", mode="before")

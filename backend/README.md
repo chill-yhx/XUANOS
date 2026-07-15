@@ -40,6 +40,32 @@ To enable a real shadow transport, set
 optional `XUANOS_LLM_TIMEOUT_SECONDS`. Keep the key in local environment
 configuration only; never commit it.
 
+For a real local shadow run, create `backend/.env` from `.env.example` and set:
+
+```text
+XUANOS_DECISION_ENGINE_PROVIDER=openai_compatible
+XUANOS_LLM_SHADOW_ENABLED=true
+XUANOS_LLM_MODEL=<provider model name>
+XUANOS_LLM_BASE_URL=<OpenAI-compatible base URL ending in /v1>
+XUANOS_LLM_API_KEY=<local secret>
+XUANOS_LLM_TIMEOUT_SECONDS=15
+```
+
+`backend/.env` is ignored by Git. Never paste the key into source, reports, logs,
+test fixtures, or chat. The formal baseline remains deterministic even when
+shadow mode is enabled.
+
+Run one or all isolated semantic cases from the repository root:
+
+```powershell
+python backend/scripts/run_shadow_evaluation.py --case ielts
+python backend/scripts/run_shadow_evaluation.py --all
+python backend/scripts/run_shadow_evaluation.py --all --output reports/shadow-evaluation.json
+```
+
+Each run uses a temporary migrated SQLite database, creates a new server-issued
+user session and thread per case, and writes companion JSON and Markdown reports.
+
 The formal workflow remains:
 
 ```text

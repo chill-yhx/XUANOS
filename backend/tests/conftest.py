@@ -16,6 +16,8 @@ TEST_DB_PATH = Path(tempfile.gettempdir()) / f"xuanos-test-{uuid4().hex}.db"
 os.environ["XUANOS_DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
 os.environ["XUANOS_APP_ENV"] = "development"
 os.environ["XUANOS_DEMO_RESET_ENABLED"] = "true"
+os.environ["XUANOS_DECISION_ENGINE_PROVIDER"] = "deterministic"
+os.environ["XUANOS_LLM_SHADOW_ENABLED"] = "false"
 
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402

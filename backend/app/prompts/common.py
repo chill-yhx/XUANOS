@@ -14,6 +14,10 @@ When information is missing, include it in unknown_information. The next action
 must serve the current primary goal and respect stated reality constraints.
 Return one JSON object only: no Markdown, explanation, or surrounding text."""
 
+EXAMPLE_RULES = """The required_output_example demonstrates the exact JSON keys
+and value types only. Do not copy placeholder text. Replace every placeholder
+with context-grounded content, or identify missing data in unknown_information."""
+
 
 def build_structured_prompt(
     *,
@@ -21,11 +25,14 @@ def build_structured_prompt(
     task: str,
     context: DecisionContext,
     output_schema: type[BaseModel],
+    output_example: dict,
 ) -> PromptSpec:
     user_payload = {
         "task": task,
+        "json_output_instruction": EXAMPLE_RULES,
         "context": context.model_dump(mode="json"),
         "required_output_schema": output_schema.model_json_schema(),
+        "required_output_example": output_example,
     }
     return PromptSpec(
         version=version,
