@@ -1,49 +1,52 @@
-const AUTH_STORAGE_KEY = 'xuanos:auth-session:v1'
 export const AUTH_SESSION_INVALIDATED_EVENT = 'xuanos:auth-session-invalidated'
+const LEGACY_AUTH_STORAGE_KEY = 'xuanos:auth-session:v1'
 
 export interface StoredAuthSession {
-  accessToken: string
   userId: string
+  displayName: string | null
+  phoneMasked: string
+  phoneVerified: boolean
+  hasPassword: boolean
+  needsPasswordSetup: boolean
   expiresAt: string
 }
 
-function isStoredAuthSession(value: unknown): value is StoredAuthSession {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<StoredAuthSession>
-  return Boolean(
-    candidate.accessToken
-    && candidate.userId
-    && candidate.expiresAt
-    && Number.isFinite(Date.parse(candidate.expiresAt)),
-  )
-}
+let currentSession: StoredAuthSession | null = null
 
-export function readAuthSession(): StoredAuthSession | null {
+export function purgeLegacyAuthStorage() {
+  if (typeof window === 'undefined') return
   try {
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY)
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (!isStoredAuthSession(parsed) || Date.parse(parsed.expiresAt) <= Date.now()) {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY)
-      return null
-    }
-    return parsed
+    window.localStorage.removeItem(LEGACY_AUTH_STORAGE_KEY)
   } catch {
-    return null
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+  try {
+    window.sessionStorage.removeItem(LEGACY_AUTH_STORAGE_KEY)
+  } catch {
+    // Cookie auth remains usable without browser storage.
   }
 }
 
+export function readAuthSession(): StoredAuthSession | null {
+  if (!currentSession) return null
+  if (!Number.isFinite(Date.parse(currentSession.expiresAt)) || Date.parse(currentSession.expiresAt) <= Date.now()) {
+    currentSession = null
+    return null
+  }
+  return currentSession
+}
+
 export function writeAuthSession(session: StoredAuthSession) {
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session))
+  currentSession = session
 }
 
 export function invalidateAuthSession() {
-  const current = readAuthSession()
-  try {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY)
-  } finally {
+  const userId = currentSession?.userId ?? null
+  currentSession = null
+  if (typeof window !== 'undefined') {
+    purgeLegacyAuthStorage()
     window.dispatchEvent(new CustomEvent(AUTH_SESSION_INVALIDATED_EVENT, {
-      detail: { userId: current?.userId ?? null },
+      detail: { userId },
     }))
   }
 }

@@ -92,7 +92,7 @@ function publicApiError(error: ApiError): { code: string; message: string } {
   if (['AUTH_REQUIRED', 'AUTH_INVALID', 'AUTH_EXPIRED'].includes(error.code)) {
     return {
       code: 'AUTH_INVALID',
-      message: '当前 XUANOS 会话无效，请刷新页面重新建立安全会话。',
+      message: '当前 XUANOS 会话已失效，请重新登录。',
     }
   }
   if (error.code === 'API_UNREACHABLE') {

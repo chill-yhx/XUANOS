@@ -1,5 +1,6 @@
 from typing import Any
 
+from auth_helpers import cookie_headers, invite_and_login
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
@@ -7,10 +8,7 @@ from app.main import app
 
 
 def issue_identity(client: TestClient) -> tuple[str, dict[str, str]]:
-    response = client.post("/api/sessions")
-    assert response.status_code == 201
-    data = response.json()["data"]
-    return data["user_id"], {"Authorization": f"Bearer {data['access_token']}"}
+    return invite_and_login(client)
 
 
 def write_headers(auth: dict[str, str], key: str) -> dict[str, str]:
@@ -71,7 +69,7 @@ def test_missing_and_invalid_identity_are_rejected() -> None:
         missing = unauthenticated.get("/api/threads")
         invalid = unauthenticated.get(
             "/api/threads",
-            headers={"Authorization": "Bearer invalid-session-token"},
+            headers={"Cookie": f"{get_settings().session_cookie_name}=invalid-session-token"},
         )
         reset = unauthenticated.post("/api/demo/reset", json={"confirm": True})
 
@@ -85,7 +83,7 @@ def test_missing_and_invalid_identity_are_rejected() -> None:
 
 def test_users_cannot_read_or_mutate_each_others_workflow(client: TestClient) -> None:
     user_a = client.user_id  # type: ignore[attr-defined]
-    auth_a = {"Authorization": client.headers["Authorization"]}
+    auth_a = cookie_headers(client)
     user_b, auth_b = issue_identity(client)
     resources = create_accepted_plan(client, auth_a, "identity-a")
     thread = resources["thread"]
@@ -151,6 +149,8 @@ def test_reset_is_disabled_outside_development(client: TestClient) -> None:
     app.dependency_overrides[get_settings] = lambda: Settings(
         app_env="production",
         demo_reset_enabled=True,
+        sms_provider="disabled",
+        sms_code_hmac_key="test-production-hmac-key-32-bytes-minimum",
     )
     try:
         response = client.post("/api/demo/reset", json={"confirm": True})
@@ -163,7 +163,7 @@ def test_reset_is_disabled_outside_development(client: TestClient) -> None:
 
 def test_development_reset_only_clears_current_user(client: TestClient) -> None:
     user_a = client.user_id  # type: ignore[attr-defined]
-    auth_a = {"Authorization": client.headers["Authorization"]}
+    auth_a = cookie_headers(client)
     user_b, auth_b = issue_identity(client)
     thread_a = client.post(
         "/api/threads",

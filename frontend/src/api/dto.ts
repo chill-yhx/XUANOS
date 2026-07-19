@@ -6,11 +6,30 @@ export interface ApiEnvelope<T> {
   }
 }
 
+export interface AuthUserDto {
+  id: string
+  phone_masked: string
+  display_name: string | null
+  status: 'active' | 'disabled'
+  phone_verified: boolean
+  has_password: boolean
+}
+
 export interface AuthSessionDto {
-  access_token: string
-  token_type: 'bearer'
-  user_id: string
+  user: AuthUserDto
   expires_at: string
+  needs_password_setup: boolean
+}
+
+export interface SendCodeResultDto {
+  accepted: boolean
+  retry_after_seconds: number
+  message: string
+}
+
+export interface AuthOperationResultDto {
+  completed: boolean
+  message: string
 }
 
 export interface ThreadDto {

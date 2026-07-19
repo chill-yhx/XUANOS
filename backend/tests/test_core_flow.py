@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
+from auth_helpers import cookie_headers
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -286,7 +287,7 @@ def test_full_core_flow_and_idempotent_feedback(client: TestClient) -> None:
     assert aggregate["latest_action_result"]["id"] == result["action_result"]["id"]
     assert aggregate["current_snapshot"]["id"] == result["snapshot"]["id"]
 
-    with TestClient(app, headers={"Authorization": client.headers["Authorization"]}) as restarted_client:
+    with TestClient(app, headers=cookie_headers(client)) as restarted_client:
         restored = restarted_client.get(f"/api/threads/{context.thread_id}")
     assert restored.status_code == 200
     assert restored.json()["data"]["thread"]["current_step"] == "system_revised"
@@ -423,7 +424,7 @@ def test_plan_accept_transaction_rolls_back_when_snapshot_fails(client: TestClie
     monkeypatch.setattr(SnapshotService, "create_version", fail_snapshot)
     with TestClient(
         app,
-        headers={"Authorization": client.headers["Authorization"]},
+        headers=cookie_headers(client),
         raise_server_exceptions=False,
     ) as failure_client:
         response = failure_client.post(
@@ -478,7 +479,7 @@ def test_feedback_transaction_rolls_back_when_snapshot_fails(client: TestClient,
     monkeypatch.setattr(SnapshotService, "create_version", fail_snapshot)
     with TestClient(
         app,
-        headers={"Authorization": client.headers["Authorization"]},
+        headers=cookie_headers(client),
         raise_server_exceptions=False,
     ) as failure_client:
         response = failure_client.post(

@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
+from auth_helpers import cookie_headers
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -205,6 +206,7 @@ def test_stale_snapshot_correction_is_rejected_without_partial_writes(client: Te
     }
 
     barrier = Barrier(2)
+    auth_headers = cookie_headers(client)
 
     def submit(payload: dict[str, str], key: str):
         with TestClient(app) as concurrent_client:
@@ -212,7 +214,7 @@ def test_stale_snapshot_correction_is_rejected_without_partial_writes(client: Te
             return concurrent_client.post(
                 "/api/users/me/corrections",
                 headers={
-                    "Authorization": client.headers["Authorization"],
+                    **auth_headers,
                     "Idempotency-Key": key,
                 },
                 json=payload,

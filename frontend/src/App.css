@@ -5099,6 +5099,315 @@
   color: rgba(243, 239, 229, 0.78);
 }
 
+.top-account-prompt {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(217, 195, 143, 0.18);
+  border-radius: 4px;
+  background: rgba(217, 195, 143, 0.06);
+  color: rgba(217, 195, 143, 0.72);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+/* Invite-only mainland phone authentication */
+.auth-screen {
+  position: relative;
+  display: grid;
+  min-height: 100vh;
+  overflow: hidden;
+  place-items: center;
+  padding: 32px 20px;
+  isolation: isolate;
+}
+
+.auth-stage {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  width: min(430px, calc(100vw - 32px));
+  min-width: 0;
+  gap: 22px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.auth-brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(217, 195, 143, 0.22);
+  border-radius: 50%;
+  color: rgba(255, 240, 189, 0.86);
+  font-size: 13px;
+}
+
+.auth-brand div {
+  display: grid;
+  gap: 3px;
+}
+
+.auth-brand strong {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: 0.24em;
+}
+
+.auth-brand small {
+  color: rgba(243, 239, 229, 0.34);
+  font-size: 7px;
+  letter-spacing: 0.28em;
+}
+
+.auth-panel {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 34px;
+  border: 1px solid rgba(232, 202, 128, 0.15);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.014)),
+    linear-gradient(145deg, rgba(27, 23, 13, 0.5), rgba(3, 3, 3, 0.52));
+  box-shadow: 0 42px 140px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(34px) saturate(155%);
+  -webkit-backdrop-filter: blur(34px) saturate(155%);
+}
+
+.auth-panel h1 {
+  margin: 10px 0 8px;
+  font-size: clamp(28px, 8vw, 40px);
+  font-weight: 620;
+  letter-spacing: 0;
+  line-height: 1.12;
+}
+
+.auth-panel > p {
+  margin: 0 0 25px;
+  color: rgba(243, 239, 229, 0.48);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  margin-bottom: 24px;
+  padding: 3px;
+  border: 1px solid rgba(243, 239, 229, 0.06);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.auth-mode-switch button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: rgba(243, 239, 229, 0.38);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.auth-mode-switch button.is-active {
+  background: rgba(243, 239, 229, 0.07);
+  color: rgba(243, 239, 229, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.auth-form,
+.auth-field {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+}
+
+.auth-form {
+  gap: 17px;
+}
+
+.auth-field > span:first-child {
+  color: rgba(243, 239, 229, 0.44);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.auth-field > input,
+.auth-phone-input,
+.auth-code-input {
+  min-height: 44px;
+  border: 1px solid rgba(243, 239, 229, 0.09);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.auth-field > input,
+.auth-phone-input input,
+.auth-code-input input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(243, 239, 229, 0.88);
+}
+
+.auth-field > input {
+  width: 100%;
+  padding: 0 13px;
+}
+
+.auth-phone-input,
+.auth-code-input {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+}
+
+.auth-phone-input {
+  grid-template-columns: auto 1fr;
+}
+
+.auth-phone-input strong {
+  padding: 0 13px;
+  border-right: 1px solid rgba(243, 239, 229, 0.07);
+  color: rgba(217, 195, 143, 0.75);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.auth-phone-input input,
+.auth-code-input input {
+  width: 100%;
+  height: 42px;
+  padding: 0 13px;
+}
+
+.auth-code-input {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.auth-code-input button {
+  min-width: 94px;
+  height: 32px;
+  margin-right: 5px;
+  border: 1px solid rgba(217, 195, 143, 0.16);
+  border-radius: 4px;
+  background: rgba(217, 195, 143, 0.05);
+  color: rgba(217, 195, 143, 0.66);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.auth-submit {
+  min-height: 45px;
+  border: 1px solid rgba(255, 240, 189, 0.38);
+  border-radius: 5px;
+  background: rgba(217, 195, 143, 0.88);
+  color: #17130a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.auth-text-action {
+  width: fit-content;
+  margin: -6px auto 0;
+  border: 0;
+  background: transparent;
+  color: rgba(243, 239, 229, 0.4);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.auth-message {
+  padding: 10px 11px;
+  border-left: 1px solid rgba(217, 195, 143, 0.32);
+  background: rgba(217, 195, 143, 0.04);
+  color: rgba(243, 239, 229, 0.56);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.auth-message.is-error {
+  border-left-color: rgba(183, 92, 74, 0.66);
+  color: rgba(240, 169, 154, 0.8);
+}
+
+.auth-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 100vh;
+  color: rgba(243, 239, 229, 0.5);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.account-security-panel {
+  margin-top: 8px;
+}
+
+.account-identity-line,
+.account-password-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.account-identity-line {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.account-identity-line > div {
+  display: grid;
+  gap: 7px;
+  padding: 13px;
+  border-top: 1px solid rgba(243, 239, 229, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.account-identity-line strong {
+  color: rgba(243, 239, 229, 0.72);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.account-password-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.account-security-note {
+  color: rgba(243, 239, 229, 0.48);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+@media (max-width: 760px) {
+  .account-password-grid,
+  .account-identity-line {
+    grid-template-columns: 1fr;
+  }
+
+  .top-account-prompt {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-panel {
+    padding: 27px 20px;
+  }
+}
+
 .top-thread-select:disabled,
 .top-thread-add:disabled {
   cursor: wait;

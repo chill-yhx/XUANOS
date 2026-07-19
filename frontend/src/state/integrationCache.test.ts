@@ -43,8 +43,12 @@ const storage = new MemoryStorage()
 
 function authenticate(userId: string) {
   writeAuthSession({
-    accessToken: `token-${userId}`,
     userId,
+    displayName: userId,
+    phoneMasked: '138****5678',
+    phoneVerified: true,
+    hasPassword: false,
+    needsPasswordSetup: true,
     expiresAt: '2099-01-01T00:00:00Z',
   })
 }

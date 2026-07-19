@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CorrectionResultNotice } from '../components/CorrectionResultNotice'
+import { AccountSecurityPanel } from '../components/AccountSecurityPanel'
 import { CorrectionTargetCard } from '../components/CorrectionTargetCard'
 import { GlassPanel } from '../components/GlassPanel'
 import { PrimaryButton } from '../components/PrimaryButton'
@@ -240,6 +241,8 @@ export function SystemPage({ onNavigate }: PageProps) {
           <SecondaryButton onClick={() => onNavigate('feedback')}>查看最近反馈</SecondaryButton>
         </div>
       )}
+
+      <AccountSecurityPanel />
     </section>
   )
 }

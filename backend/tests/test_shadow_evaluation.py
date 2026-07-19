@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from auth_helpers import invite_and_login
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -338,12 +339,8 @@ def test_evaluations_are_user_and_thread_isolated(client: TestClient, monkeypatc
     user_a = client.user_id  # type: ignore[attr-defined]
 
     with TestClient(app) as second_client:
-        created = second_client.post("/api/sessions")
-        assert created.status_code == 201
-        identity = created.json()["data"]
-        second_client.headers.update({"Authorization": f"Bearer {identity['access_token']}"})
+        user_b, _headers = invite_and_login(second_client)
         flow_b = create_full_flow(second_client, "shadow-user-b", goal="一个月内学会做三道家常菜。")
-        user_b = identity["user_id"]
 
     records_a = evaluations_for(user_a, flow_a["thread_id"])
     records_b = evaluations_for(user_b, flow_b["thread_id"])

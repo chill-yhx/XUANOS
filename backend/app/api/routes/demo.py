@@ -24,7 +24,7 @@ def reset_demo(
     settings: Annotated[Settings, Depends(get_settings)],
     current_user: CurrentUser,
 ) -> dict:
-    if settings.app_env != "development" or not settings.demo_reset_enabled:
+    if settings.app_env not in {"development", "test"} or not settings.demo_reset_enabled:
         raise APIError(status.HTTP_404_NOT_FOUND, "RESOURCE_NOT_FOUND", "资源不存在。")
     snapshot = DemoService(session, current_user.id).reset()
     result = DemoResetResult(

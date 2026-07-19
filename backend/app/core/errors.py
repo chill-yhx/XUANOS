@@ -48,6 +48,11 @@ def error_response(
     )
 
 
+def safe_validation_details(exc: RequestValidationError) -> list[dict[str, Any]]:
+    allowed_fields = {"loc", "msg", "type", "url"}
+    return [{key: value for key, value in item.items() if key in allowed_fields} for item in exc.errors()]
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(APIError)
     async def handle_api_error(request: Request, exc: APIError) -> JSONResponse:
@@ -55,7 +60,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-        return error_response(request, 422, "VALIDATION_ERROR", "请求数据校验失败。", exc.errors())
+        return error_response(request, 422, "VALIDATION_ERROR", "请求数据校验失败。", safe_validation_details(exc))
 
     @app.exception_handler(HTTPException)
     async def handle_http_error(request: Request, exc: HTTPException) -> JSONResponse:

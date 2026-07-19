@@ -6,10 +6,21 @@ from app.models.snapshot import UserSnapshot
 from app.models.user import User
 
 
-def create_user_with_snapshot(session: Session, user_id: str) -> tuple[User, UserSnapshot]:
+def create_user_with_snapshot(
+    session: Session,
+    user_id: str,
+    *,
+    phone_e164: str | None = None,
+    display_name: str | None = None,
+    is_invited: bool = False,
+    status: str = "active",
+) -> tuple[User, UserSnapshot]:
     user = User(
         id=user_id,
-        display_name="XUANOS 用户",
+        phone_e164=phone_e164,
+        display_name=display_name or "XUANOS 用户",
+        is_invited=is_invited,
+        status=status,
         timezone="Asia/Shanghai",
         consent_version="v0.1",
     )

@@ -1,5 +1,6 @@
 import type { PageId } from '../types'
 import { useInteraction } from '../state/useInteraction'
+import { useAuth } from '../state/useAuth'
 
 const labels: Record<PageId, string> = {
   home: '入口',
@@ -16,6 +17,7 @@ interface TopStatusBarProps {
 
 export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
   const { state, switchThread, createNewThread } = useInteraction()
+  const auth = useAuth()
   const isSyncing = state.isLoading
     || state.understandingRequestStatus === 'loading'
     || state.planRequestStatus === 'loading'
@@ -74,6 +76,9 @@ export function TopStatusBar({ currentPage, onNavigate }: TopStatusBarProps) {
         >
           +
         </button>
+        {auth.session?.needsPasswordSetup && (
+          <button className="top-account-prompt" type="button" onClick={() => onNavigate('system')}>设置登录密码</button>
+        )}
         <button className="top-system-link" type="button" onClick={() => onNavigate('system')}>我的系统</button>
       </div>
     </header>

@@ -2,7 +2,8 @@ import { ApiError, apiErrorFromResponse } from './apiErrors'
 import { invalidateAuthSession, readAuthSession } from './authSession'
 import type { ApiEnvelope } from './dto'
 
-const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000'
+const DEFAULT_API_HOST = typeof window === 'undefined' ? 'localhost' : window.location.hostname
+const DEFAULT_API_BASE_URL = `http://${DEFAULT_API_HOST}:8000`
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL).replace(/\/$/, '')
 
@@ -37,13 +38,13 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
         invalidateAuthSession()
         throw new ApiError('需要有效的 XUANOS 会话。', { code: 'AUTH_REQUIRED', status: 401 })
       }
-      headers.Authorization = `Bearer ${authSession.accessToken}`
     }
 
     const response = await fetch(`${API_BASE_URL}${path}`, {
       method: options.method ?? 'GET',
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      credentials: 'include',
       signal: controller.signal,
     })
     const text = await response.text()
